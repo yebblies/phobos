@@ -1,0 +1,157 @@
+/*
+ *  Copyright (C) 2004 by Digital Mars, www.digitalmars.com
+ *  Written by Walter Bright
+ *
+ *  This software is provided 'as-is', without any express or implied
+ *  warranty. In no event will the authors be held liable for any damages
+ *  arising from the use of this software.
+ *
+ *  Permission is granted to anyone to use this software for any purpose,
+ *  including commercial applications, and to alter it and redistribute it
+ *  freely, in both source and binary form, subject to the following
+ *  restrictions:
+ *
+ *  o  The origin of this software must not be misrepresented; you must not
+ *     claim that you wrote the original software. If you use this software
+ *     in a product, an acknowledgment in the product documentation would be
+ *     appreciated but is not required.
+ *  o  Altered source versions must be plainly marked as such, and must not
+ *     be misrepresented as being the original software.
+ *  o  This notice may not be removed or altered from any source
+ *     distribution.
+ */
+
+
+import object;
+import std.string;
+import std.c.stdio;
+
+extern (C):
+
+byte[] _d_arraycat(byte[] x, byte[] y, uint size)
+{   byte[] a;
+    uint length;
+
+    if (!x.length)
+	return y;
+    if (!y.length)
+	return x;
+
+    length = x.length + y.length;
+    a = new byte[length * size];
+    memcpy(a, x, x.length * size);
+    //a[0 .. x.length * size] = x[];
+    memcpy(&a[x.length * size], y, y.length * size);
+    *cast(int *)&a = length;	// jam length
+    //a.length = length;
+    return a;
+}
+
+byte[] _d_arraycatn(uint size, uint n, ...)
+{   byte[] a;
+    uint length;
+    byte[]* p;
+    uint i;
+    byte[] b;
+
+    p = cast(byte[]*)(&n + 1);
+
+    for (i = 0; i < n; i++)
+    {
+	b = *p++;
+	length += b.length;
+    }
+    if (!length)
+	return null;
+
+    a = new byte[length * size];
+    p = cast(byte[]*)(&n + 1);
+
+    uint j = 0;
+    for (i = 0; i < n; i++)
+    {
+	b = *p++;
+	if (b.length)
+	{
+	    memcpy(&a[j], b, b.length * size);
+	    j += b.length * size;
+	}
+    }
+
+    *cast(int *)&a = length;	// jam length
+    //a.length = length;
+    return a;
+}
+
+byte[] _d_arraycopy(uint size, byte[] from, byte[] to)
+{
+    //printf("f = %p,%d, t = %p,%d, size = %d\n", (void*)from, from.length, (void*)to, to.length, size);
+
+    if (to.length != from.length)
+    {
+	throw new Error("lengths don't match for array copy");
+    }
+    else if (cast(byte *)to + to.length * size <= cast(byte *)from ||
+	cast(byte *)from + from.length * size <= cast(byte *)to)
+    {
+	memcpy(cast(byte *)to, cast(byte *)from, to.length * size);
+    }
+    else
+    {
+	throw new Error("overlapping array copy");
+    }
+    return to;
+}
+
+bit[] _d_arraycopybit(bit[] from, bit[] to)
+{
+    //printf("f = %p,%d, t = %p,%d\n", (void*)from, from.length, (void*)to, to.length);
+    uint nbytes;
+
+    if (to.length != from.length)
+    {
+	throw new Error("lengths don't match for array copy");
+    }
+    else
+    {
+	nbytes = (to.length + 7) / 8;
+	if (cast(void *)to + nbytes <= cast(void *)from ||
+	    cast(void *)from + nbytes <= cast(void *)to)
+	{
+	    nbytes = to.length / 8;
+	    if (nbytes)
+		memcpy(cast(void *)to, cast(void *)from, nbytes);
+
+	    if (to.length & 7)
+	    {
+		/* Copy trailing bits.
+		 */
+		static ubyte[8] masks = [0,1,3,7,0x0F,0x1F,0x3F,0x7F];
+		ubyte mask = masks[to.length & 7];
+		(cast(ubyte*)to)[nbytes] &= ~mask;
+		(cast(ubyte*)to)[nbytes] |= (cast(ubyte*)from)[nbytes] & mask;
+	    }
+	}
+	else
+	{
+	    throw new Error("overlapping array copy");
+	}
+    }
+    return to;
+}
+
+bit[] _d_arraysetbit(bit[] ba, uint lwr, uint upr, bit value)
+in
+{
+    //printf("_d_arraysetbit(ba.length = %d, lwr = %u, upr = %u, value = %d)\n", ba.length, lwr, upr, value);
+    assert(lwr <= upr);
+    assert(upr <= ba.length);
+}
+body
+{
+    // Inefficient; lots of room for improvement here
+    for (uint i = lwr; i < upr; i++)
+	ba[i] = value;
+
+    return ba;
+}
