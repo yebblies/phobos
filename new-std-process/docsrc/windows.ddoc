@@ -1,0 +1,8 @@
+
+WINDOWS=$0
+LINUX=
+SEP=\
+OBJEXT=obj
+LIBEXT=lib
+DMDDIR=\dmd2
+FOO=
