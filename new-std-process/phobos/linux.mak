@@ -40,7 +40,7 @@ DDOCFLAGS=-version=ddoc -d -c -o- $(STDDOC)
 CC =
 DMD =
 CFLAGS =
-DFLAGS = -I../druntime/import -I../druntime/src
+DFLAGS =
 
 # BUILD can be debug or release, but is unset by default; recursive
 # invocation will set it. See the debug and release targets below.

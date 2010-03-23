@@ -1112,7 +1112,7 @@ unittest
     version (Posix)
     {
 	// Retrieve the current home variable.
-        auto c_home = std.process.getenv("HOME");
+        auto c_home = std.system.getEnv("HOME");
 
         // Testing when there is no environment variable.
         unsetenv("HOME");
