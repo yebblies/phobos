@@ -3,28 +3,29 @@ Ddoc
 $(D_S D Change Log,
 
 
-$(VERSION 042, Mar 15, 2010, =================================================,
+$(VERSION 046, May 9, 2010, =================================================,
 
     $(WHATSNEW
+	$(LI Add hints for missing import declarations.)
+	$(LI Speed up compilation.)
+	$(LI All length methods in Phobos are now a @property.)
+	$(LI $(BUGZILLA 1001): print stack trace (in debug mode) when program die)
     )
     $(BUGSFIXED
-	$(LI Add base class destruction to clear() in object.d)
-	$(LI $(BUGZILLA 3842): ICE(expression.c) using pointer in CTFE)
-	$(LI $(BUGZILLA 3885): No multithread support for Windows DLL)
-	$(LI $(BUGZILLA 3899): CTFE: poor error message for use of uninitialized variable)
-	$(LI $(BUGZILLA 3900): CTFE: Wrong return value for array.var assignment)
-	$(LI $(BUGZILLA 3901): PATCH: Nested struct assignment for CTFE)
-	$(LI $(BUGZILLA 3902): Definition of opCmp)
-	$(LI $(BUGZILLA 3912): pure static nested functions are not recognized as pure)
-	$(LI $(BUGZILLA 3914): Struct as argument that fits in register has member accessed wrong)
-	$(LI $(BUGZILLA 3919): ICE(expression.c, 9944): * or / with typedef ireal)
-	$(LI $(BUGZILLA 3920): Assertion failure: '0' on line 10018 in file 'expression.c')
-	$(LI $(BUGZILLA 3930): AAs horribly broken)
+	$(LI Fix hanging problem on undefined identifiers.)
+	$(LI $(BUGZILLA 3945): AssertExpression message should implicitly convert to const char[])
+	$(LI $(BUGZILLA 4100): Break and continue to label should mention foreach)
+	$(LI $(BUGZILLA 4116): object.di does not match object_.d)
+	$(LI $(BUGZILLA 4146): Unavailable: core.sys.posix.sys.wait.waitid())
     )
 )
 
 <div id=version>
 $(UL
+	$(NEW 046)
+	$(NEW 045)
+	$(NEW 044)
+	$(NEW 043)
 	$(NEW 042)
 	$(NEW 041)
 	$(NEW 040)
@@ -77,6 +78,103 @@ $(UL
 	$(LI $(LINK2 http://www.digitalmars.com/pnews/index.php?category=2, tech support))
 )
 </div>
+
+$(VERSION 045, May 4, 2010, =================================================,
+
+    $(WHATSNEW
+    )
+    $(BUGSFIXED
+	$(LI Another try at fixing the Dwarf issues.)
+    )
+)
+
+$(VERSION 044, Apr 30, 2010, =================================================,
+
+    $(WHATSNEW
+	$(LI Improve spelling checking distance to 2.)
+	$(LI Now all unittests are run, even if some fail)
+	$(LI Many small improvements to error diagnostics and recovery)
+    )
+    $(BUGSFIXED
+	$(LI $(BUGZILLA 1079): gdb: Dwarf Error: Cannot find DIE at 0xb705 referenced from DIE at 0x250)
+	$(LI $(BUGZILLA 2437): ICE(tocsym.c, !needThis()) - default struct argument)
+	$(LI $(BUGZILLA 2935): ICE(out.c) using struct with constructor as function default argument)
+	$(LI $(BUGZILLA 2549): Segfault on array multiplication.)
+	$(LI $(BUGZILLA 3066): Array operation without a slice as the lvalue accepted, bad codegen)
+	$(LI $(BUGZILLA 3207): gdb: Push D patches upstream)
+	$(LI $(BUGZILLA 3415): broken JSON output)
+	$(LI $(BUGZILLA 3522): ICE(cg87.c): variable*array[].)
+	$(LI $(BUGZILLA 3987): [gdb] Invalid DWARF output for function pointers)
+	$(LI $(BUGZILLA 3974): ICE(init.c): Static array initializer with more elements than destination array)
+	$(LI $(BUGZILLA 4036): Segfault with -inline and literal of struct containing union)
+	$(LI $(BUGZILLA 4037): [gdb] Invalid DWARF output for wchar)
+	$(LI $(BUGZILLA 4038): [gdb] Invalid DWARF output for function pointers with ref args)
+	$(LI $(BUGZILLA 4067): [CTFE] Code inside try-catch blocks is silently ignored)
+	$(LI $(BUGZILLA 4072): Stack overflow on recursive template expansion inside contract)
+	$(LI $(BUGZILLA 4081): cannot compile the dmd on FreeBSD 8)
+	$(LI $(BUGZILLA 4089): crash when creating JSON output for incomplete struct)
+	$(LI $(BUGZILLA 4093): Segfault(interpret.c): with recursive struct templates)
+	$(LI $(BUGZILLA 4105): Stack overflow involving alias template parameters and undefined identifier)
+	$(LI $(BUGZILLA 4108): ICE(cod2.c): zero-length static array in function call)
+	$(LI $(BUGZILLA 4118): std.conv.to!SomeStruct("hello") crashes compiler)
+	$(LI $(BUGZILLA 4131): break does not work correctly with foreach and associative arrays)
+    )
+)
+
+$(VERSION 043, Apr 6, 2010, =================================================,
+
+    $(WHATSNEW
+	$(LI $(B .init) property for static arrays is now an array literal)
+	$(LI Improved speed of associative arrays)
+	$(LI std.bigint has been completely replaced with a faster implementation.
+	   Multiplication is now 5 times faster, division is
+	   300 times faster, and squaring is 10 times faster. For large numbers
+	   (~5000 words), the speedup is 5 times larger than this.)
+	 )
+    )
+    $(BUGSFIXED
+	$(LI Fixed memory corruption problem with array appends)
+	$(LI $(BUGZILLA 122): DDoc newline behaviour produces suboptimal results)
+	$(LI $(BUGZILLA 1628): Ddoc produces invalid documentation for --- blocks)
+	$(LI $(BUGZILLA 2609): No documentation generated for destructor)
+	$(LI $(BUGZILLA 3808): Assertion Failure : Assertion failure: 'classinfo->structsize == CLASSINFO_SIZE' on line 870 in file 'toobj.c')
+	$(LI $(BUGZILLA 3884): Segfault: defining a typedef with an invalid object.d)
+	$(LI $(BUGZILLA 3911): Associative array in CTFE crashes compiler)
+	$(LI $(BUGZILLA 3958): mixin(non-static method) crashes compiler)
+	$(LI $(BUGZILLA 3972): Regarding module with name different from its file name)
+	$(LI $(BUGZILLA 3984): Segfault(interpret.c): CTFE using struct constructor on a local static variable)
+	$(LI $(BUGZILLA 3986): Struct constructors bypass default initialization of member variables)
+	$(LI $(BUGZILLA 4002): dmd.conf and binary path in dmd -v output)
+	$(LI $(BUGZILLA 4004): DMD 2.042 CTFE regression with functions taking ref parameters)
+	$(LI $(BUGZILLA 4005): std.c.stdlib.exit in CTFE and more)
+	$(LI $(BUGZILLA 4011): Incorrect function overloading using mixins)
+	$(LI $(BUGZILLA 4019): [CTFE] Adding an item to an empty AA)
+	$(LI $(BUGZILLA 4020): [ICE][CTFE] struct postblit in CTFE)
+	$(LI $(BUGZILLA 4023): std.math.hypot() returns infinity when either argument is zero)
+	$(LI $(BUGZILLA 4027): Closures in CTFE generate wrong code)
+	$(LI $(BUGZILLA 4029): CTFE: cannot invoke delegate returned from function)
+    )
+)
+
+$(VERSION 042, Mar 19, 2010, =================================================,
+
+    $(WHATSNEW
+    )
+    $(BUGSFIXED
+	$(LI Add base class destruction to clear() in object.d)
+	$(LI $(BUGZILLA 3842): ICE(expression.c) using pointer in CTFE)
+	$(LI $(BUGZILLA 3885): No multithread support for Windows DLL)
+	$(LI $(BUGZILLA 3899): CTFE: poor error message for use of uninitialized variable)
+	$(LI $(BUGZILLA 3900): CTFE: Wrong return value for array.var assignment)
+	$(LI $(BUGZILLA 3901): PATCH: Nested struct assignment for CTFE)
+	$(LI $(BUGZILLA 3902): Definition of opCmp)
+	$(LI $(BUGZILLA 3912): pure static nested functions are not recognized as pure)
+	$(LI $(BUGZILLA 3914): Struct as argument that fits in register has member accessed wrong)
+	$(LI $(BUGZILLA 3919): ICE(expression.c, 9944): * or / with typedef ireal)
+	$(LI $(BUGZILLA 3920): Assertion failure: '0' on line 10018 in file 'expression.c')
+	$(LI $(BUGZILLA 3930): AAs horribly broken)
+    )
+)
 
 $(VERSION 041, Mar 7, 2010, =================================================,
 
