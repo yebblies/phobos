@@ -7,7 +7,8 @@ Copyright: Copyright Digital Mars 2007 - 2009.
 License:   <a href="http://www.boost.org/LICENSE_1_0.txt">Boost License 1.0</a>.
 Authors:   $(WEB digitalmars.com, Walter Bright),
            $(WEB erdani.org, Andrei Alexandrescu),
-           Shin Fujishiro
+           Shin Fujishiro,
+           Adam D. Ruppe
 
          Copyright Digital Mars 2007 - 2009.
 Distributed under the Boost Software License, Version 1.0.
@@ -21,6 +22,8 @@ import core.memory, core.stdc.errno, core.stdc.string, core.stdc.stdlib,
     std.ctype, std.math, std.range, std.stdio,
     std.string, std.traits, std.typecons, std.typetuple,
     std.utf;
+import std.metastrings;
+
 //debug=conv;           // uncomment to turn on debugging printf's
 
 /* ************* Exceptions *************** */
@@ -98,15 +101,15 @@ T to(T, S)(S s) if (!implicitlyConverts!(S, T) && isSomeString!(T)
         // same width, only qualifier conversion
         enum tIsConst = is(T == const(char)[]) || is(T == const(wchar)[])
             || is(T == const(dchar)[]);
-        enum tIsInvariant = is(T == invariant(char)[])
-            || is(T == invariant(wchar)[]) || is(T == invariant(dchar)[]);
+        enum tIsInvariant = is(T == immutable(char)[])
+            || is(T == immutable(wchar)[]) || is(T == immutable(dchar)[]);
         static if (tIsConst) {
             return s;
         } else static if (tIsInvariant) {
-            // conversion (mutable|const) -> invariant
+            // conversion (mutable|const) -> immutable
             return s.idup;
         } else {
-            // conversion (invariant|const) -> mutable
+            // conversion (immutable|const) -> mutable
             return s.dup;
         }
     } else {
@@ -128,12 +131,12 @@ unittest
     alias TypeTuple!(char, wchar, dchar) Chars;
     foreach (LhsC; Chars)
     {
-        alias TypeTuple!(LhsC[], const(LhsC)[], invariant(LhsC)[]) LhStrings;
+        alias TypeTuple!(LhsC[], const(LhsC)[], immutable(LhsC)[]) LhStrings;
         foreach (Lhs; LhStrings)
         {
             foreach (RhsC; Chars)
             {
-                alias TypeTuple!(RhsC[], const(RhsC)[], invariant(RhsC)[])
+                alias TypeTuple!(RhsC[], const(RhsC)[], immutable(RhsC)[])
                     RhStrings;
                 foreach (Rhs; RhStrings)
                 {
@@ -159,7 +162,7 @@ if (isSomeString!(T) && !isSomeString!(S) && isArray!(S))
     alias Unqual!(typeof(T.init[0])) Char;
     // array-to-string conversion
     static if (is(S == void[])
-            || is(S == const(void)[]) || is(S == invariant(void)[])) {
+            || is(S == const(void)[]) || is(S == immutable(void)[])) {
         auto raw = cast(const(ubyte)[]) s;
         enforce(raw.length % Char.sizeof == 0, "Alignment mismatch"
                 " in converting a " ~ S.stringof ~ " to a " ~ T.stringof);
@@ -629,10 +632,10 @@ if (!implicitlyConverts!(S, T)
     static if (sSmallest < 0) {
         // possible underflow converting from a signed
         static if (tSmallest == 0) {
-            invariant good = value >= 0;
+            immutable good = value >= 0;
         } else {
             static assert(tSmallest < 0);
-            invariant good = value >= tSmallest;
+            immutable good = value >= tSmallest;
         }
         if (!good) ConvOverflowError.raise("Conversion negative overflow");
     }
@@ -681,7 +684,7 @@ unittest
     assert(b == [ 1.0f, 2, 3 ]);
     auto c = to!(string[])(b);
     assert(c[0] == "1" && c[1] == "2" && c[2] == "3");
-    invariant(int)[3] d = [ 1, 2, 3 ];
+    immutable(int)[3] d = [ 1, 2, 3 ];
     b = to!(float[])(d);
     assert(b == [ 1.0f, 2, 3 ]);
     uint[][] e = [ a, a ];
@@ -725,7 +728,7 @@ unittest {
             assert(s1 == to!(T[])(s2));
             auto s3 = to!(const(U)[])(s1);
             assert(s1 == to!(T[])(s3));
-            auto s4 = to!(invariant(U)[])(s1);
+            auto s4 = to!(immutable(U)[])(s1);
             assert(s1 == to!(T[])(s4));
         }
     }
@@ -845,7 +848,7 @@ unittest {
     // test parsing
     {
         foreach (T; AllNumerics) {
-            // from type invariant(char)[2]
+            // from type immutable(char)[2]
             auto a = to!(T)("42");
             assert(a == 42);
             // from type char[]
@@ -857,7 +860,7 @@ unittest {
             s2[] = "42";
             a = to!(T)(s2);
             assert(a == 42);
-            // from type invariant(wchar)[2]
+            // from type immutable(wchar)[2]
             a = to!(T)("42"w);
             assert(a == 42);
         }
@@ -1207,7 +1210,7 @@ if (isSomeString!Source && is(Target == typedef))
 //     else
 //     {
 //         // Larger than int types
-//         invariant length = s.length;
+//         immutable length = s.length;
 //         if (!length)
 //             goto Lerr;
 
@@ -1298,7 +1301,7 @@ unittest
     i = to!int("-2147483648");
     assert(i == 0x80000000);
 
-    invariant string[] errors =
+    immutable string[] errors =
     [
         "",
         "-",
@@ -1806,7 +1809,7 @@ unittest
 }
 
 // @@@ BUG IN COMPILER
-// lvalue of type invariant(T)[] should be implicitly convertible to
+// lvalue of type immutable(T)[] should be implicitly convertible to
 // ref const(T)[].
 // F parseFloating(S : S[], F)(ref S[] s)
 // {
@@ -2536,7 +2539,7 @@ if (std.typetuple.staticIndexOf!(Unqual!S, uint, ulong) >= 0 && isSomeString!T)
     {
         if (value < 10)
         {
-            static invariant Char[10] digits = "0123456789";
+            static immutable Char[10] digits = "0123456789";
             // Avoid storage allocation for simple stuff
             return digits[cast(size_t) value .. cast(size_t) value + 1];
         }
@@ -2594,7 +2597,7 @@ T to(T, S)(S c) if (staticIndexOf!(Unqual!S, char, wchar, dchar) >= 0
 version(unittest) private alias TypeTuple!(
     char, wchar, dchar,
     const(char), const(wchar), const(dchar),
-    invariant(char), invariant(wchar), invariant(dchar))
+    immutable(char), immutable(wchar), immutable(dchar))
                       AllChars;
 
 unittest
@@ -2627,7 +2630,7 @@ if (staticIndexOf!(Unqual!S, int, long) >= 0 && isSomeString!T)
         {
             static immutable Char[20] data =
                 "00-1-2-3-4-5-6-7-8-9";
-            invariant i = cast(size_t) -value * 2;
+            immutable i = cast(size_t) -value * 2;
             return data[i .. i + 2];
         }
     }
@@ -3086,4 +3089,234 @@ unittest
     auto s = "123";
     auto t = parse!Testing(s);
     assert(t == cast(Testing) 123);
+}
+
+//------------------------------------------------------------------------------
+// octal
+//------------------------------------------------------------------------------
+/*
+Take a look at int.max and int.max+1 in octal and the logic for this
+function follows directly.
+ */
+template octalFitsInInt(string octalNum) {
+	// note it is important to strip the literal of all
+	// non-numbers. kill the suffix and underscores lest they mess up
+	// the number of digits here that we depend on.
+    enum bool octalFitsInInt = strippedOctalLiteral(octalNum).length < 11 ||
+        strippedOctalLiteral(octalNum).length == 11 &&
+        strippedOctalLiteral(octalNum)[0] == '1';
+}
+
+string strippedOctalLiteral(string original) {
+	string stripped;
+	foreach (c; original)
+		if (c >= '0' && c <= '7')
+			stripped ~= c;
+	return stripped;
+}
+
+template literalIsLong(string num) {
+	static if (num.length > 1)
+        // can be xxL or xxLu according to spec
+		enum literalIsLong = (num[$-1] == 'L' || num[$-2] == 'L');
+	else
+		enum literalIsLong = false;
+}
+
+template literalIsUnsigned(string num) {
+	static if (num.length > 1)
+        // can be xxL or xxLu according to spec
+		enum literalIsUnsigned = (num[$-1] == 'u' || num[$-2] == 'u')
+            // both cases are allowed too
+            || (num[$-1] == 'U' || num[$-2] == 'U'); 
+	else
+        enum literalIsUnsigned = false;
+}
+
+/**
+The $(D octal) facility is intended as an experimental facility to
+replace _octal literals starting with $(D '0'), which many find
+confusing. Using $(D octal!177) or $(D octal!"177") instead of $(D
+0177) as an _octal literal makes code clearer and the intent more
+visible. If use of this facility becomes preponderent, a future
+version of the language may deem old-style _octal literals deprecated.
+
+The rules for strings are the usual for literals: If it can fit in an
+$(D int), it is an $(D int). Otherwise, it is a $(D long). But, if the
+user specifically asks for a $(D long) with the $(D L) suffix, always
+give the $(D long). Give an unsigned iff it is asked for with the $(D
+U) or $(D u) suffix. _Octals created from integers preserve the type
+of the passed-in integral.
+
+Example:
+----
+// same as 0177
+auto x = octal!177;
+// octal is a compile-time device
+enum y = octal!160;
+// Create an unsigned octal
+auto z = octal!"1_000_000u";
+----
+ */
+int octal(string num)()
+if((octalFitsInInt!(num) && !literalIsLong!(num)) && !literalIsUnsigned!(num)) {
+	return octal!(int, num);
+}
+
+/// Ditto
+long octal(string num)()
+if((!octalFitsInInt!(num) || literalIsLong!(num)) && !literalIsUnsigned!(num)) {
+	return octal!(long, num);
+}
+
+/// Ditto
+uint octal(string num)()
+if((octalFitsInInt!(num) && !literalIsLong!(num)) && literalIsUnsigned!(num)) {
+	return octal!(int, num);
+}
+
+/// Ditto
+ulong octal(string num)()
+if((!octalFitsInInt!(num) || literalIsLong!(num)) && literalIsUnsigned!(num)) {
+	return octal!(long, num);
+}
+
+/*
+Returns if the given string is a correctly formatted octal literal.
+
+The format is specified in lex.html. The leading zero is allowed, but
+not required.
+ */
+bool isOctalLiteralString(string num) {
+	if (num.length == 0)
+		return false;
+    
+	// Must start with a number. To avoid confusion, literals that
+    // start with a '0' are not allowed
+    if (num[0] == '0' && num.length > 1)
+        return false;
+	if (num[0] < '0' || num[0] > '7')
+		return false;
+	
+	foreach (i, c; num) {
+		if ((c < '0' || c > '7') && c != '_') // not a legal character
+			if (i < num.length - 2)
+				return false;
+			else { // gotta check for those suffixes
+				if (c != 'U' && c != 'u' && c != 'L')
+					return false;
+				if (i != num.length - 1) {
+                    // if we're not the last one, the next one must
+                    // also be a suffix to be valid
+					char c2 = num[$-1];
+					if (c2 != 'U' && c2 != 'u' && c2 != 'L')
+						return false; // spam at the end of the string
+					if (c2 == c)
+						return false; // repeats are disallowed
+				}
+			}
+	}
+
+	return true;
+}
+
+/*
+	Returns true if the given compile time string is an octal literal.
+*/
+template isOctalLiteral(string num) {
+	enum bool isOctalLiteral = isOctalLiteralString(num);
+}
+
+/*
+	Takes a string, num, which is an octal literal, and returns its
+	value, in the type T specified.
+
+	So:
+
+	int a = octal!(int, "10");
+
+	assert(a == 8);
+*/
+T octal(T, string num)() {
+    static assert(isOctalLiteral!num, num ~ " is not a valid octal literal");
+
+    ulong pow = 1;
+    T value = 0;
+
+    for (int pos = num.length - 1; pos >= 0; pos--) {
+        char s = num[pos];
+	if (s < '0' || s > '7') // we only care about digits; skip the rest
+        // safe to skip - this is checked out in the assert so these
+        // are just suffixes
+		continue; 
+	
+	value += pow * (s - '0');
+	pow *= 8;
+  }
+
+  return value;
+}
+
+/// Ditto
+template octal(alias s) if (isIntegral!(typeof(s))) {
+	enum auto octal = octal!(typeof(s), toStringNow!(s));
+}
+
+unittest
+{
+	// ensure that you get the right types, even with embedded underscores
+	auto w = octal!"100_000_000_000";
+	static assert(!is(typeof(w) == int));
+	auto w2 = octal!"1_000_000_000";
+	static assert(is(typeof(w2) == int));
+
+    static assert(octal!"45" == 37);
+    static assert(octal!"0" == 0);
+    static assert(octal!"7" == 7);
+    static assert(octal!"10" == 8);
+    static assert(octal!"666" == 438);
+
+    static assert(octal!45 == 37);
+    static assert(octal!0 == 0);
+    static assert(octal!7 == 7);
+    static assert(octal!10 == 8);
+    static assert(octal!666 == 438);
+
+    static assert(octal!"66_6" == 438);
+
+    static assert(octal!2520046213 == 356535435);
+    static assert(octal!"2520046213" == 356535435);
+
+    static assert(octal!17777777777 == int.max);
+
+    static assert(!__traits(compiles, octal!823));
+
+    // for some reason, this line fails, though if you try it in code,
+    // it indeed doesn't compile... weird.
+
+    // static assert(!__traits(compiles, octal!"823"));
+
+    static assert(!__traits(compiles, octal!"_823"));
+    static assert(!__traits(compiles, octal!"spam"));
+    static assert(!__traits(compiles, octal!"77%"));
+
+    int a;
+    long b;
+
+    // biggest value that should fit in an it
+    static assert(__traits(compiles,  a = octal!"17777777777"));
+    // should not fit in the int
+    static assert(!__traits(compiles, a = octal!"20000000000"));
+    // ... but should fit in a long
+    static assert(__traits(compiles, b = octal!"20000000000")); 
+    
+    static assert(!__traits(compiles, a = octal!"1L"));
+
+    // this should pass, but it doesn't, since the int converter
+    // doesn't pass along its suffix to helper templates
+
+    //static assert(!__traits(compiles, a = octal!1L));
+
+    static assert(__traits(compiles, b = octal!"1L"));
+    static assert(__traits(compiles, b = octal!1L));
 }

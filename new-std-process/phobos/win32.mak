@@ -102,6 +102,7 @@ SRCS= std\math.d std\stdio.d std\dateparse.d std\date.d std\uni.d std\string.d \
 	std\signals.d std\typetuple.d std\traits.d std\bind.d \
 	std\bitmanip.d std\typecons.d \
 	std\boxer.d \
+	std\complex.d \
 	std\process.d \
 	std\system.d \
 	std\iterator.d std\encoding.d std\variant.d \
@@ -244,6 +245,9 @@ SRC_STD_C_LINUX= std\c\linux\linux.d \
 	
 SRC_STD_C_OSX= std\c\osx\socket.d
 
+SRC_STD_INTERNAL_MATH= std\internal\math\biguintcore.d \
+	std\internal\math\biguintnoasm.d std\internal\math\biguintx86.d
+
 SRC_ETC=
 
 SRC_ETC_C= etc\c\zlib.d
@@ -283,7 +287,7 @@ SRC_ZLIB= etc\c\zlib\trees.h \
 
 phobos.lib : $(OBJS) $(SRCS) \
 	etc\c\zlib\zlib.lib $(DRUNTIMELIB) win32.mak
-	$(DMD) -lib -ofphobos.lib $(DFLAGS) $(SRCS) $(OBJS) \
+	$(DMD) -lib -ofphobos.lib -Xfphobos.json $(DFLAGS) $(SRCS) $(OBJS) \
 		etc\c\zlib\zlib.lib $(DRUNTIMELIB)
 
 unittest : $(SRCS) phobos.lib
@@ -764,6 +768,7 @@ zip : win32.mak linux.mak osx.mak std.ddoc $(SRC) \
 	zip32 -u phobos $(SRC_STD_C_WIN)
 	zip32 -u phobos $(SRC_STD_C_LINUX)
 	zip32 -u phobos $(SRC_STD_C_OSX)
+	zip32 -u phobos $(SRC_STD_INTERNAL_MATH)
 	zip32 -u phobos $(SRC_ETC)
 	zip32 -u phobos $(SRC_ETC_C)
 	zip32 -u phobos $(SRC_ZLIB)
@@ -777,6 +782,7 @@ clean:
 	del $(DOCS)
 	del unittest.obj unittest.map unittest.exe
 	del phobos.lib
+	del phobos.json
 
 cleanhtml:
 	del $(DOCS)
@@ -792,6 +798,7 @@ install:
 	$(CP) $(SRC_STD_C_WIN) $(DIR)\src\phobos\std\c\windows
 	$(CP) $(SRC_STD_C_LINUX) $(DIR)\src\phobos\std\c\linux
 	$(CP) $(SRC_STD_C_OSX) $(DIR)\src\phobos\std\c\osx
+	$(CP) $(SRC_STD_INTERNAL_MATH) $(DIR)\src\phobos\std\internal\math
 	#$(CP) $(SRC_ETC) $(DIR)\src\phobos\etc
 	$(CP) $(SRC_ETC_C) $(DIR)\src\phobos\etc\c
 	$(CP) $(SRC_ZLIB) $(DIR)\src\phobos\etc\c\zlib
