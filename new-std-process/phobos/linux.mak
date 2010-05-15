@@ -40,7 +40,7 @@ DDOCFLAGS=-version=ddoc -d -c -o- $(STDDOC)
 CC =
 DMD =
 CFLAGS =
-DFLAGS =
+DFLAGS = 
 
 # BUILD can be debug or release, but is unset by default; recursive
 # invocation will set it. See the debug and release targets below.
@@ -85,10 +85,11 @@ ifeq ($(OS),posix)
 endif
 
 # Set DFLAGS
+DFLAGS := -I$(DRUNTIME_PATH)/import
 ifeq ($(BUILD),debug)
-	DFLAGS=-w -g -debug -d
+	DFLAGS += -w -g -debug -d
 else
-	DFLAGS=-w -O -release -nofloat -d
+	DFLAGS += -w -O -release -nofloat -d
 endif
 
 # Set DOTOBJ and DOTEXE
@@ -118,11 +119,11 @@ endif
 MAIN = $(ROOT)/emptymain.d
 
 # Stuff in std/
-STD_MODULES = $(addprefix std/, algorithm array atomics base64 bigint	\
+STD_MODULES = $(addprefix std/, process algorithm array atomics base64 bigint	\
         bitmanip boxer compiler complex contracts conv cpuid cstream	\
         ctype date datebase dateparse demangle encoding file format		\
         functional getopt intrinsic iterator json loader math md5		\
-        metastrings mmfile numeric outbuffer path perf process random	\
+        metastrings mmfile numeric outbuffer path perf random	\
         range regex regexp signals socket socketstream stdint stdio		\
         stdiobase stream string syserror system traits typecons			\
         typetuple uni uri utf variant xml zip zlib)

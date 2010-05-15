@@ -289,7 +289,7 @@ S readText(S = string)(in char[] name)
 
 unittest
 {
-    enforce(std.process.shell("echo abc>deleteme") == 0);
+    enforce(std.process.shell("echo abc>deleteme").status == 0);
     scope(exit) remove("deleteme");
     enforce(chomp(readText("deleteme")) == "abc");
 }
@@ -589,7 +589,7 @@ version(Posix) d_time lastModified(in char[] name, d_time returnIfMissing)
 
 unittest
 {
-    std.process.shell("echo a>deleteme") == 0 || assert(false);
+    std.process.shell("echo a>deleteme").status == 0 || assert(false);
     scope(exit) remove("deleteme");
     assert(lastModified("deleteme") >
             lastModified("this file does not exist", d_time.min));
@@ -619,7 +619,7 @@ unittest
 {
     assert(exists("."));
     assert(!exists("this file does not exist"));
-    std.process.shell("echo a >deleteme") == 0 || assert(false);
+    std.process.shell("echo a >deleteme").status == 0 || assert(false);
     scope(exit) remove("deleteme");
     assert(exists("deleteme"));
 }
@@ -1339,11 +1339,11 @@ unittest
 {
     version (linux)
     {
-        assert(std.process.shell("mkdir --parents dmd-testing") == 0);
+        assert(std.process.shell("mkdir --parents dmd-testing").status == 0);
         scope(exit) std.process.shell("rm -rf dmd-testing");
-        assert(std.process.shell("mkdir --parents dmd-testing/somedir") == 0);
-        assert(std.process.shell("touch dmd-testing/somefile") == 0);
-        assert(std.process.shell("touch dmd-testing/somedir/somedeepfile")
+        assert(std.process.shell("mkdir --parents dmd-testing/somedir").status == 0);
+        assert(std.process.shell("touch dmd-testing/somefile").status == 0);
+        assert(std.process.shell("touch dmd-testing/somedir/somedeepfile").status
                 == 0);
         foreach (string name; dirEntries("dmd-testing", SpanMode.shallow))
         {
