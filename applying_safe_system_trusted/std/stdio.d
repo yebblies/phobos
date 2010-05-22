@@ -847,7 +847,7 @@ to this file. */
         return typeof(return)(this, keepTerminator, terminator);
     }
 
-    @safe /* ??? ~this */
+    @trusted /* ??? ~this */
     unittest
     {
         //printf("Entering test at line %d\n", __LINE__);
