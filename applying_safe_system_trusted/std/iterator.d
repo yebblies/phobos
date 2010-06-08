@@ -117,10 +117,10 @@ struct Retro(R : E[], E)
 {
 @safe: /* @@@BUG@@@ workaround for bugzilla 4211 */
     E[] forward;
-    static Retro opCall(E[] range)
+
+    this(E[] range)
     {
-        Retro result = { range };
-        return result;
+        forward = range;
     }
 }
 

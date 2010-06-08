@@ -682,7 +682,7 @@ class RegExp
             msg = ree.toString();
             //writefln("message: %s", ree);
         }
-        assert(msg == "std.regexp.RegExpException: unrecognized attribute");
+        assert(indexOf(msg, "unrecognized attribute") >= 0);
     }
 
     /************************************

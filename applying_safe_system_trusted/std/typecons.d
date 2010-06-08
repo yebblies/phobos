@@ -7,7 +7,6 @@ that allow construction of new, useful general-purpose types.
 Macros:
 
 WIKI = Phobos/StdVariant
-EM   = <em>$0</em>
  
 Synopsis:
 
@@ -49,7 +48,6 @@ License:   <a href="http://www.boost.org/LICENSE_1_0.txt">Boost License 1.0</a>.
 Authors:   $(WEB erdani.org, Andrei Alexandrescu),
            $(WEB bartoszmilewski.wordpress.com, Bartosz Milewski),
            Don Clugston,
-           Masahiro Nakagawa,
            Shin Fujishiro
 
          Copyright Andrei Alexandrescu 2008 - 2009.
@@ -529,309 +527,6 @@ Tuple!(T) tuple(T...)(T args)
 }
 
 
-/**
- * $(D Ignore) represents a ignored element.
- */
-struct Ignore {}
-immutable Ignore ignore;
-
-
-/**
- * $(D Tie) binds some variables for tuple unpacking
- *
- * This struct is a internal implementation. Please use $(D tie) function.
- *
- * Example:
- * -----
- * int    n;
- * double d;
- *
- * tie(n, d) = tuple(10, 3.14);
- *
- * assert(n == 10);
- * assert(d == 3.14);
- * -----
- *
- * $(D Tie) can be nested. 'ignore' is used for ignoring assignment.
- *
- * Example:
- * -----
- * ubyte  n;
- * double d;
- * string s;
- *
- * tie(ignore, tie(d, s)) = tuple(true, tuple(1.4142, "Hi!"));
- *
- * assert(n == 0);
- * assert(d == 1.4142);
- * assert(s == "Hi!");
- * -----
- *
- * $(D Tie) supports user-defined type. User-defined type needs to implement $(D opTie) method.
- *
- * Example:
- * -----
- * struct S
- * {
- *     uint n; double d;
- *
- *     void opTie(U...)(ref Tie!U tie)
- *     {
- *         tie = tuple(n, d);
- *     }
- * }
- *
- * auto   s = S(10, 3.14);
- * uint   n;
- * double d;
- *
- * tie(n, d) = s;
- *
- * assert(n == 10);
- * assert(d == 3.14);
- * -----
- */
-struct Tie(Types...) if (Types.length > 1)
-{
-@safe: /* @@@BUG@@@ workaround for bugzilla 4211 */
-  private:
-    template toAssignable(U)
-    {
-        static if (isPointer!(U) || isTie!(U) || is(U == typeof(ignore)))
-            alias U toAssignable;
-        else
-            alias U* toAssignable;
-    }
-
-    alias staticMap!(toAssignable, Types) T;
-
-    T captures_;  // references to variables
-
-
-  public:
-    /**
-     * Constructs a $(D Tie) with $(D_PARAM variables) argument.
-     *
-     * Params:
-     *  variables = a tuple to bind.
-     */
-    this(ref Types variables)
-    {
-        foreach (i, variable; variables) {
-            static if (is(typeof(variable) == typeof(ignore))) {}      // ignore
-                // do nothing
-            else static if (isPointer!(Types[i]) || isTie!(Types[i]))  // pointer, nested tie
-                captures_[i] = variables[i];
-            else                                                       // basic types
-                captures_[i] = &variables[i];
-        }
-    }
-
-
-    /**
-     * Assignment from $(D_PARAM rhs).
-     *
-     * Params:
-     *  rhs = Tuple, Tie, or User-defined type to assign.
-     *
-     * Returns:
-     *  this for chaining.
-     */
-    Tie!Types opAssign(U)(auto ref U rhs)
-    {
-        static if (is(U X == Tuple!(W), W...))
-            assignTuple(rhs);
-        else static if (__traits(compiles, rhs.opTie))
-            rhs.opTie(this);
-        else static if (is(U == Tie) && __traits(isRef, rhs))  // nested
-            this.tupleof = rhs.tupleof;
-        else static if (is(U X == Tie!(W), W...))              // chain
-            assignTie(rhs);
-        else
-            static assert(false, "Unsupported type: " ~ U.stringof);
-
-        return this;
-    }
-
-
-  private:
-    void assignTuple(U...)(ref Tuple!U rhs)
-    {
-        static if (isMatching!U) {
-            foreach (i, capture; captures_) {
-                static if (isPointer!(T[i]))                  // capture
-                    *captures_[i] = rhs.field[i];
-                else static if (is(T[i] V == Tie!(W), W...))  // nested
-                    capture = rhs.field[i];
-            }
-        } else {
-            static assert(false, "Tuple contents are mismatched");
-        }
-    }
-
-
-    void assignTie(U...)(ref Tie!U rhs)
-    {
-        static if (isMatching!U) {
-            foreach (i, capture; captures_) {
-                static if (isPointer!(T[i]))                  // capture
-                    *captures_[i] = *rhs.captures_[i];
-                else static if (is(T[i] V == Tie!(W), W...))  // nested
-                    capture.assignTie(rhs.captures_[i]);
-            }
-        } else {
-            static assert(false, "Tie contents are mismatched");
-        }
-    }
-
-
-    template isMatching(U...)
-    {
-        static if (T.length == U.length)
-            enum isMatching = verify!(0, U).result;
-        else
-            enum isMatching = false;
-    }
-
-
-    /*
-     * Verifies each element.
-     */
-    template verify(uint I, U...)
-    {
-        static assert(T.length == I + U.length, "Caluculation failure");
-
-        static if (U.length == 0) {
-            enum result = true;
-        } else {
-            alias T[I] Lhs;
-            alias U[0] Rhs;
-
-            static if (is(Lhs == typeof(ignore)))                     // ignore
-                enum result = true && verify!(I + 1, U[1..$]).result;
-            else static if (isImplicitlyConvertible!(Rhs, Types[I]))  // capture
-                enum result = true && verify!(I + 1, U[1..$]).result;
-            else static if (isTie!Lhs && isTuple!Rhs)                 // nested
-                enum result = true && verify!(I + 1, U[1..$]).result;
-            else
-                enum result = false;
-        }
-    }
-}
-
-
-/**
- * Binds $(D_PARAM variables) using $(D Tie).
- *
- * Params:
- *  variables = the contents to bind.
- *
- * Returns:
- *  a $(D Tie) object binds $(D_PARAM variables).
- */
-Tie!(T) tie(T...)(auto ref T variables)
-{
-    return typeof(return)(variables);
-}
-
-
-/**
- * Detects whether T is a $(D Tie) type.
- */
-private template isTie(T)
-{
-    enum isTie = __traits(compiles, { void f(X...)(Tie!X x) {}; f(T.init); });
-}
-
-
-/**
- * Detects whether T is a $(D Tuple) type.
- */
-private template isTuple(T)
-{
-    enum isTuple = __traits(compiles, { void f(X...)(Tuple!X x) {}; f(T.init); });
-}
-
-
-unittest
-{
-    { // capture
-        int    n;
-        double d;
-
-        tie(n, d) = tuple(20, 1.4142);
-
-        assert(n == 20);
-        assert(d == 1.4142);
-    }
-    { // ignore
-        ulong  n = 10;
-        double d = 3.14;
-
-        tie(n, ignore) = tuple(20, 1.4142);
-        
-        assert(n == 20);
-        assert(d == 3.14);
-
-        tie(ignore, d) = tuple(20, 1.4142);
-        
-        assert(n == 20);
-        assert(d == 1.4142);
-    }
-    { // nested
-        ubyte  n;
-        double d;
-        string s;
-
-        tie(n, tie(d, s)) = tuple(true, tuple(1.4142, "Hi!"));
-
-        assert(n == 1);
-        assert(d == 1.4142);
-        assert(s == "Hi!");
-    }
-    { // chain
-        ulong  a, b;
-        real   c, d;
-        string e, f;
-
-        tie(a, tie(c, e)) = tie(b, tie(d, f)) = tuple(9, tuple(1.4142L, "Hi!"));
-
-        assert(a == 9);
-        assert(b == 9);
-        assert(c == 1.4142L);
-        assert(d == 1.4142L);
-        assert(e == "Hi!");
-        assert(f == "Hi!");
-    }
-    { // user-defined type
-        static class C
-        {
-            int n_; double d_;
-
-            this(int n, double d)
-            { 
-                n_ = n;
-                d_ = d;
-            }
-
-            void opTie(U...)(ref Tie!U tie)
-            {
-                tie = tuple(n_, d_);
-            }
-        }
-
-        auto   c = new C(10, 3.14);
-        int    n;
-        double d;
-
-        tie(n, d) = c;
-        
-        assert(n == 10);
-        assert(d == 3.14);
-    }
-}
-
-
 private template enumValuesImpl(string name, BaseType, long index, T...)
 {
     static if (name.length)
@@ -1007,7 +702,7 @@ break the soundness of D's type system and does not incur any of the
 risks usually associated with $(D cast).
 
  */
-template Rebindable(T) if (is(T : Object) || isArray!(T))
+template Rebindable(T) if (is(T == class) || is(T == interface) || isArray!(T))
 {
     static if (!is(T X == const(U), U) && !is(T X == immutable(U), U))
     {
@@ -1032,11 +727,21 @@ template Rebindable(T) if (is(T : Object) || isArray!(T))
             {
                 stripped = cast(U) another;
             }
-            static Rebindable opCall(T initializer)
+            void opAssign(Rebindable another)
             {
-                Rebindable result;
-                result = initializer;
-                return result;
+                stripped = another.stripped;
+            }
+            static if (is(T == const U))
+            {
+                // safely assign immutable to const
+                void opAssign(Rebindable!(immutable U) another)
+                {
+                    stripped = another.stripped;
+                }
+            }
+            this(T initializer)
+            {
+                opAssign(initializer);
             }
             alias original get;
             T opDot() {
@@ -1068,6 +773,23 @@ unittest
 
     // test opDot
     assert(obj2.foo == 42);
+
+    interface I { final int foo() const { return 42; } }
+    Rebindable!(I) obj3;
+    static assert(is(typeof(obj3) == I));
+
+    Rebindable!(const I) obj4;
+    static assert(is(typeof(obj4.get) == const I));
+    static assert(is(typeof(obj4.stripped) == I));
+    static assert(is(typeof(obj4.foo()) == int));
+    obj4 = new class I {};
+
+    Rebindable!(immutable C) obj5i;
+    Rebindable!(const C) obj5c;
+    obj5c = obj5c;
+    obj5c = obj5i;
+    obj5i = obj5i;
+    static assert(!__traits(compiles, obj5i = obj5c));
 }
 
 /**
@@ -1396,11 +1118,18 @@ unittest
 
 
 /**
-$(D AutoImplement), by default, automatically implements all abstract member
-functions in the class or interface $(D Base) as do-nothing functions.
+$(D BlackHole!Base) is a subclass of $(D Base) which automatically implements
+all abstract member functions in $(D Base) as do-nothing functions.  Each
+auto-implemented function just returns the default value of the return type
+without doing anything.
 
+The name came from
+$(WEB search.cpan.org/~sburke/Class-_BlackHole-0.04/lib/Class/_BlackHole.pm, Class::_BlackHole)
+Perl module by Sean M. Burke.
+
+Example:
 --------------------
-abstract class Base
+abstract class C
 {
     int m_value;
     this(int v) { m_value = v; }
@@ -1412,24 +1141,145 @@ abstract class Base
 
 void main()
 {
-    auto obj = new AutoImplement!Base(42);
-    writeln(obj.value);     // prints "42"
+    auto c = new BlackHole!C(42);
+    writeln(c.value);     // prints "42"
 
     // Abstract functions are implemented as do-nothing:
-    writeln(obj.realValue); // prints "NaN"
-    obj.doSomething();      // does nothing
+    writeln(c.realValue); // prints "NaN"
+    c.doSomething();      // does nothing
 }
 --------------------
 
-The behavior can be customized with the parameters.
+See_Also:
+  AutoImplement, generateEmptyFunction
+ */
+template BlackHole(Base)
+{
+    alias AutoImplement!(Base, generateEmptyFunction, isAbstractFunction)
+            BlackHole;
+}
+
+unittest
+{
+    // return default
+    {
+        interface I_1 { real test(); }
+        auto o = new BlackHole!I_1;
+        assert(o.test() !<>= 0); // NaN
+    }
+    // doc example
+    {
+        static class C
+        {
+            int m_value;
+            this(int v) { m_value = v; }
+            int value() @property { return m_value; }
+
+            abstract real realValue() @property;
+            abstract void doSomething();
+        }
+
+        auto c = new BlackHole!C(42);
+        assert(c.value == 42);
+
+        assert(c.realValue !<>= 0); // NaN
+        c.doSomething();
+    }
+}
+
+
+/**
+$(D WhiteHole!Base) is a subclass of $(D Base) which automatically implements
+all abstract member functions as throw-always functions.  Each auto-implemented
+function fails with throwing an $(D Error) and does never return.  Useful for
+trapping use of not-yet-implemented functions.
+
+The name came from
+$(WEB search.cpan.org/~mschwern/Class-_WhiteHole-0.04/lib/Class/_WhiteHole.pm, Class::_WhiteHole)
+Perl module by Michael G Schwern.
+
+Example:
+--------------------
+class C
+{
+    abstract void notYetImplemented();
+}
+
+void main()
+{
+    auto c = new WhiteHole!C;
+    c.notYetImplemented(); // throws an Error
+}
+--------------------
+
+BUGS:
+  Nothrow functions cause program to abort in release mode because the trap is
+  implemented with $(D assert(0)) for nothrow functions.
+
+See_Also:
+  AutoImplement, generateAssertTrap
+ */
+template WhiteHole(Base)
+{
+    alias AutoImplement!(Base, generateAssertTrap, isAbstractFunction)
+            WhiteHole;
+}
+
+// / ditto
+class NotImplementedError : Error
+{
+    @trusted /// @@@DRUNTIME@@@
+    this(string method)
+    {
+        super(method ~ " is not implemented");
+    }
+}
+
+unittest
+{
+    // nothrow
+    debug // see the BUGS above
+    {
+        interface I_1
+        {
+            void foo();
+            void bar() nothrow;
+        }
+        auto o = new WhiteHole!I_1;
+        uint trap;
+        try { o.foo(); } catch (Error e) { ++trap; }
+        assert(trap == 1);
+        try { o.bar(); } catch (Error e) { ++trap; }
+        assert(trap == 2);
+    }
+    // doc example
+    {
+        static class C
+        {
+            abstract void notYetImplemented();
+        }
+
+        auto c = new WhiteHole!C;
+        try
+        {
+            c.notYetImplemented();
+            assert(0);
+        }
+        catch (Error e) {}
+    }
+}
+
+
+/**
+$(D AutoImplement) automatically implements (by default) all abstract member
+functions in the class or interface $(D Base) in specified way.
 
 Params:
-  how  = A template which determines _how functions will be
-         implemented/overridden.
+  how  = template which specifies _how functions will be implemented/overridden.
 
-         Two arguments are passed to $(D how): the first one is the $(D Base),
-         and the second one is an alias to a function to be implemented.  Then
-         $(D how) must return a implemented function body as a string.
+         Two arguments are passed to $(D how): the type $(D Base) and an alias
+         to an implemented function.  Then $(D how) must return an implemented
+         function body as a string.
 
          The generated function body can use these keywords:
          $(UL
@@ -1465,7 +1315,7 @@ string generateLogger(C, alias fun)() @property
 }
 --------------------
 
-  what = A template which determines _what functions should be
+  what = template which determines _what functions should be
          implemented/overridden.
 
          An argument is passed to $(D what): an alias to a non-final member
@@ -1500,14 +1350,12 @@ $(UL
       does not override any function".  [$(BUGZILLA 2525), $(BUGZILLA 3525)] )
  $(LI The $(D parent) keyword is actually a delegate to the super class'
       corresponding member function.  [$(BUGZILLA 2540)] )
- $(LI Using $(D alias) template parameter in $(D how) and/or $(D what) may
-      cause strange compile error.  Use template tuple parameter instead to
-      workaround this problem.  [$(BUGZILLA 4217)] )
+ $(LI Using alias template parameter in $(D how) and/or $(D what) may cause
+     strange compile error.  Use template tuple parameter instead to workaround
+     this problem.  [$(BUGZILLA 4217)] )
 )
  */
-class AutoImplement( Base,
-        alias how = generateEmptyFunction, alias what = isAbstractFunction )
-    : Base
+class AutoImplement(Base, alias how, alias what = isAbstractFunction) : Base
 {
 @system:
     private alias AutoImplement_Helper!(
@@ -1667,12 +1515,6 @@ private static:
             enum string FUNCINFO_ID =
                 myName ~ "." ~ INTERNAL_FUNCINFO_ID!(name, i);
         }
-
-        // preferred identifier for i-th parameter variable
-        template PARAMETER_VARIABLE_ID(size_t i)
-        {
-            enum string PARAMETER_VARIABLE_ID = "a" ~ toStringNow!(i);
-        }
     }
 
     /* Policy configurations for generating constructors. */
@@ -1736,24 +1578,18 @@ unittest
     // no function to implement
     {
         interface I_1 {}
-        auto o = new AutoImplement!I_1;
-    }
-    // return value
-    {
-        interface I_2 { real test(); }
-        auto o = new AutoImplement!I_2;
-        assert(o.test() !<>= 0); // NaN
+        auto o = new BlackHole!I_1;
     }
     // parameters
     {
         interface I_3 { void test(int, in int, out int, ref int, lazy int); }
-        auto o = new AutoImplement!I_3;
+        auto o = new BlackHole!I_3;
     }
     // use of user-defined type
     {
-        typedef int MyInt;
-        interface I_4 { MyInt test(); }
-        //auto o = new AutoImplement!I_4; // ??? 
+        struct S {}
+        interface I_4 { S test(); }
+        auto o = new BlackHole!I_4;
     }
     // overloads
     {
@@ -1764,7 +1600,7 @@ unittest
             int  test();
             int  test() @property; // ?
         }
-        auto o = new AutoImplement!I_5;
+        auto o = new BlackHole!I_5;
     }
     // constructor forwarding
     {
@@ -1772,11 +1608,37 @@ unittest
         {
             this(int n) { assert(n == 42); }
             this(string s) { assert(s == "Deeee"); }
-            //this(...) {}
+            this(...) {}
         }
-        auto o1 = new AutoImplement!C_6(42);
-        auto o2 = new AutoImplement!C_6("Deeee");
-        //auto o3 = new AutoImplement!C_6(1, 2, 3, 4);
+        auto o1 = new BlackHole!C_6(42);
+        auto o2 = new BlackHole!C_6("Deeee");
+        auto o3 = new BlackHole!C_6(1, 2, 3, 4);
+    }
+    // attributes
+    {
+        interface I_7
+        {
+            ref int test_ref();
+            int test_pure() pure;
+            int test_nothrow() nothrow;
+            int test_property() @property;
+            int test_safe() @safe;
+            int test_trusted() @trusted;
+            int test_system() @system;
+            int test_pure_nothrow() pure nothrow;
+        }
+        auto o = new BlackHole!I_7;
+    }
+    // storage classes
+    {
+        interface I_8
+        {
+            void test_const() const;
+            void test_immutable() immutable;
+            void test_shared() shared;
+            void test_shared_const() shared const;
+        }
+        auto o = new BlackHole!I_8;
     }
     /+ // deep inheritance
     {
@@ -1785,98 +1647,16 @@ unittest
         interface I { void foo(); }
         interface J : I {}
         interface K : J {}
-        static abstract class C_8 : K {}
-        auto o = new AutoImplement!C_8;
-    } +/
-    // doc example
-    {
-        static class Base
-        {
-            int m_value;
-            this(int v) { m_value = v; }
-            int value() @property { return m_value; }
-
-            abstract real realValue() @property;
-            abstract void doSomething();
-        }
-
-        auto obj = new AutoImplement!Base(42);
-        assert(obj.value == 42);
-
-        assert(obj.realValue !<>= 0); // NaN
-        obj.doSomething();
-    }
-}
-
-
-/**
-The default $(EM how)-policy for $(D AutoImplement).  Every generated function
-returns the default value without doing anything.
- */
-template generateEmptyFunction(C, func.../+[BUG 4217]+/)
-{
-    static if (is(ReturnType!(func) == void))
-        enum string generateEmptyFunction = q{
-        };
-    else static if (functionAttributes!(func) & FunctionAttribute.REF)
-        enum string generateEmptyFunction = q{
-            static typeof(return) dummy;
-            return dummy;
-        };
-    else
-        enum string generateEmptyFunction = q{
-            return typeof(return).init;
-        };
-}
-
-
-/**
-A $(EM how)-policy for $(D AutoImplement).  Every generated function fails with
-$(D AssertError) and does never return.  Useful for trapping use of
-not-yet-implemented functions.
-
-Example:
---------------------
-class C
-{
-    abstract void notYetImplemented();
-}
-
-void main()
-{
-    auto obj = new AutoImplement!(C, generateAssertTrap);
-    obj.notYetImplemented(); // throws AssertError
-}
---------------------
- */
-template generateAssertTrap(C, func.../+[BUG 4217]+/)
-{
-    enum string generateAssertTrap =
-        `assert(0, "` ~ (C.stringof ~ "." ~ __traits(identifier, func))
-                ~ ` is not implemented");`;
-}
-
-unittest // doc example
-{
-    static class C
-    {
-        abstract void notYetImplemented();
-    }
-
-    auto o = new AutoImplement!(C, generateAssertTrap);
-    try
-    {
-        o.notYetImplemented();
-        assert(0);
-    }
-    catch (Error e) {}
+        static abstract class C_9 : K {}
+        auto o = new BlackHole!C_9;
+    }+/
 }
 
 
 /*
 Used by MemberFunctionGenerator.
  */
-private template OverloadSet(string nam, T...)
+package template OverloadSet(string nam, T...)
 {
     enum string name = nam;
     alias T contents;
@@ -1885,26 +1665,71 @@ private template OverloadSet(string nam, T...)
 /*
 Used by MemberFunctionGenerator.
  */
-private template FuncInfo(alias func, /+[BUG 4217 ?]+/ T = typeof(&func))
+package template FuncInfo(alias func, /+[BUG 4217 ?]+/ T = typeof(&func))
 {
     alias         ReturnType!(T) RT;
     alias ParameterTypeTuple!(T) PT;
 }
+package template FuncInfo(Func)
+{
+    alias         ReturnType!(Func) RT;
+    alias ParameterTypeTuple!(Func) PT;
+}
 
 /*
 General-purpose member function generator.
+--------------------
+template GeneratingPolicy()
+{
+    // [optional] the name of the class where functions are derived
+    enum string BASE_CLASS_ID;
+
+    // [optional] define this if you have only function types
+    enum bool WITHOUT_SYMBOL;
+
+    // [optional] Returns preferred identifier for i-th parameter.
+    template PARAMETER_VARIABLE_ID(size_t i);
+
+    // Returns the identifier of the FuncInfo instance for the i-th overload
+    // of the specified name.  The identifier must be accessible in the scope
+    // where generated code is mixed.
+    template FUNCINFO_ID(string name, size_t i);
+
+    // Returns implemented function body as a string.  When WITHOUT_SYMBOL is
+    // defined, the latter is used.
+    template generateFunctionBody(alias func);
+    template generateFunctionBody(string name, FuncType);
+}
+--------------------
  */
-private template MemberFunctionGenerator(alias Policy)
+package template MemberFunctionGenerator(alias Policy)
 {
 private static:
-    //mixin Policy; // can't
-
     //:::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::://
     // Internal stuffs
     //:::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::://
 
     enum CONSTRUCTOR_NAME = "__ctor";
-    enum WITH_BASE_CLASS  = __traits(compiles, Policy.BASE_CLASS_ID);
+
+    // true if functions are derived from a base class
+    enum WITH_BASE_CLASS = __traits(hasMember, Policy, "BASE_CLASS_ID");
+
+    // true if functions are specified as types, not symbols
+    enum WITHOUT_SYMBOL = __traits(hasMember, Policy, "WITHOUT_SYMBOL");
+
+    // preferred identifier for i-th parameter variable
+    static if (__traits(hasMember, Policy, "PARAMETER_VARIABLE_ID"))
+    {
+        alias Policy.PARAMETER_VARIABLE_ID PARAMETER_VARIABLE_ID;
+    }
+    else
+    {
+        template PARAMETER_VARIABLE_ID(size_t i)
+        {
+            enum string PARAMETER_VARIABLE_ID = "a" ~ toStringNow!(i);
+                // default: a0, a1, ...
+        }
+    }
 
     // Returns a tuple consisting of 0,1,2,...,n-1.  For static foreach.
     template CountUp(size_t n)
@@ -1958,7 +1783,8 @@ private static:
         {
             enum i = 0 + i_; // workaround
             code ~= generateFunction!(
-                    oset.contents[i], Policy.FUNCINFO_ID!(oset.name, i)) ~ "\n";
+                    Policy.FUNCINFO_ID!(oset.name, i), oset.name,
+                    oset.contents[i]) ~ "\n";
         }
         return code;
     }
@@ -1968,23 +1794,37 @@ private static:
      * actually generates only the declarator part; the function body part is
      * generated by the functionGenerator() policy.
      */
-    //private string generateFunction(alias func, string myFuncInfo)() @property
-    private string generateFunction(args_.../+[BUG 4217]+/)() @property
+    public string generateFunction(
+            string myFuncInfo, string name, func... )() @property
     {
-        alias args_[0..1] func; enum myFuncInfo = args_[1];
-
-        enum name   = __traits(identifier, func);
         enum isCtor = (name == CONSTRUCTOR_NAME);
 
         string code; // the result
 
         /*** Function Declarator ***/
         {
+            alias FunctionTypeOf!(func) Func;
             alias FunctionAttribute FA;
             enum atts     = functionAttributes!(func);
             enum realName = isCtor ? "this" : name;
 
-            /* Just for the sake of Format!(...). */
+            /* Made them CTFE funcs just for the sake of Format!(...) */
+
+            // return type with optional "ref"
+            static string make_returnType()
+            {
+                string rtype = "";
+
+                if (!isCtor)
+                {
+                    if (atts & FA.REF) rtype ~= "ref ";
+                    rtype ~= myFuncInfo ~ ".RT";
+                }
+                return rtype;
+            }
+            enum returnType = make_returnType();
+
+            // function attributes attached after declaration
             static string make_postAtts()
             {
                 string poatts = "";
@@ -1997,26 +1837,24 @@ private static:
             }
             enum postAtts = make_postAtts();
 
-            static string make_returnType()
+            // function storage class
+            static string make_storageClass()
             {
-                string rtype = "";
-
-                if (!isCtor)
-                {
-                    if (atts & FA.REF) rtype ~= "ret ";
-                    rtype ~= myFuncInfo ~ ".RT";
-                }
-                return rtype;
+                string postc = "";
+                if (is(Func ==    shared)) postc ~= " shared";
+                if (is(Func ==     const)) postc ~= " const";
+                if (is(Func == immutable)) postc ~= " immutable";
+                return postc;
             }
-            enum returnType = make_returnType();
+            enum storageClass = make_storageClass();
 
             //
-            code ~= Format!("extern(%s) %s %s(%s) %s\n",
+            code ~= Format!("extern(%s) %s %s(%s) %s %s\n",
                     functionLinkage!(func),
                     returnType,
                     realName,
-                    ""~generateParameters!(func, myFuncInfo),
-                    postAtts );
+                    ""~generateParameters!(myFuncInfo, func),
+                    postAtts, storageClass );
         }
 
         /*** Function Body ***/
@@ -2036,9 +1874,14 @@ private static:
                     preamble ~= "auto parent = &super." ~ name ~ ";\n";
             }
 
-            //
+            // Function body
+            static if (WITHOUT_SYMBOL)
+                enum fbody = Policy.generateFunctionBody!(name, func);
+            else
+                enum fbody = Policy.generateFunctionBody!(func);
+
             code ~= preamble;
-            code ~= Policy.generateFunctionBody!(func);
+            code ~= fbody;
         }
         code ~= "}";
 
@@ -2049,11 +1892,8 @@ private static:
      * Returns D code which declares function parameters.
      * "ref int a0, real a1, ..."
      */
-    //private string generateParameters(alias func, string myFuncInfo)() @property
-    private string generateParameters(args_.../+[BUG 4217]+/)() @property
+    private string generateParameters(string myFuncInfo, func...)() @property
     {
-        alias args_[0..1] func; enum myFuncInfo = args_[1];
-
         alias ParameterStorageClass STC;
         alias ParameterStorageClassTuple!(func) stcs;
         enum nparams = stcs.length;
@@ -2074,7 +1914,7 @@ private static:
             params ~= myFuncInfo ~ ".PT[" ~ toStringNow!(i) ~ "]";
 
             // Declare a parameter variable.
-            params ~= " " ~ Policy.PARAMETER_VARIABLE_ID!(i);
+            params ~= " " ~ PARAMETER_VARIABLE_ID!(i);
         }
 
         // Add some ellipsis part if needed.
@@ -2106,8 +1946,47 @@ private static:
         {
             enum i = 0 + i_; // workaround
             if (i > 0) params ~= ", ";
-            params ~= Policy.PARAMETER_VARIABLE_ID!(i);
+            params ~= PARAMETER_VARIABLE_ID!(i);
         }
         return params;
     }
+}
+
+
+/**
+Predefined how-policies for $(D AutoImplement).  These templates are used by
+$(D BlackHole) and $(D WhiteHole), respectively.
+ */
+template generateEmptyFunction(C, func.../+[BUG 4217]+/)
+{
+    static if (is(ReturnType!(func) == void))
+        enum string generateEmptyFunction = q{
+        };
+    else static if (functionAttributes!(func) & FunctionAttribute.REF)
+        enum string generateEmptyFunction = q{
+            static typeof(return) dummy;
+            return dummy;
+        };
+    else
+        enum string generateEmptyFunction = q{
+            return typeof(return).init;
+        };
+}
+
+/// ditto
+template generateAssertTrap(C, func.../+[BUG 4217]+/)
+{
+    static if (functionAttributes!(func) & FunctionAttribute.NOTHROW) //XXX
+    {
+        pragma(msg, "Warning: WhiteHole!(", C, ") used assert(0) instead "
+                "of Error for the auto-implemented nothrow function ",
+                C, ".", __traits(identifier, func));
+        enum string generateAssertTrap =
+            `assert(0, "` ~ C.stringof ~ "." ~ __traits(identifier, func)
+                    ~ ` is not implemented");`;
+    }
+    else
+        enum string generateAssertTrap =
+            `throw new NotImplementedError("` ~ C.stringof ~ "."
+                    ~ __traits(identifier, func) ~ `");`;
 }

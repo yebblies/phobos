@@ -89,6 +89,7 @@ deprecated alias ticksPerMinute TicksPerMinute;
 deprecated alias ticksPerHour TicksPerHour;
 deprecated alias ticksPerDay TicksPerDay;
 
+deprecated
 unittest
 {
     assert(ticksPerSecond == TicksPerSecond);
@@ -1125,6 +1126,7 @@ void f2() { auto b = to!(string)(a); }
 auto r = benchmark!(f0, f1, f2)(10_000_000);
 ----
  */
+@trusted
 ulong[] benchmark(fun...)(uint times, ulong[] result = null)
 {
     result.length = fun.length;

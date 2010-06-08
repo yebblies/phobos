@@ -542,20 +542,20 @@ template EncoderFunctions()
 
 struct CodePoints(E)
 {
+@safe:
     const(E)[] s;
 
-    static CodePoints opCall(const(E)[] s)
+    this(const(E)[] s)
     in
     {
         assert(isValid(s));
     }
     body
     {
-        CodePoints codePoints;
-        codePoints.s = s;
-        return codePoints;
+        this.s = s;
     }
 
+    @trusted /* @@@BUG@@@ workaround for bugzilla 4211 */
     int opApply(scope int delegate(ref dchar) dg)
     {
         int result = 0;
@@ -568,6 +568,20 @@ struct CodePoints(E)
         return result;
     }
 
+    @safe /* @@@BUG@@@ workaround for bugzilla 4211 */
+    int opApply(scope int delegate(ref dchar)@safe dg)
+    {
+        int result = 0;
+        while (s.length != 0)
+        {
+            dchar c = decode(s);
+            result = dg(c);
+            if (result != 0) break;
+        }
+        return result;
+    }
+
+    @trusted /* @@@BUG@@@ workaround for bugzilla 4211 */
     int opApply(scope int delegate(ref uint, ref dchar) dg)
     {
         uint i = 0;
@@ -584,6 +598,24 @@ struct CodePoints(E)
         return result;
     }
 
+    @safe /* @@@BUG@@@ workaround for bugzilla 4211 */
+    int opApply(scope int delegate(ref uint, ref dchar)@safe dg)
+    {
+        uint i = 0;
+        int result = 0;
+        while (s.length != 0)
+        {
+            uint len = s.length;
+            dchar c = decode(s);
+            uint j = i; // We don't want the delegate corrupting i
+            result = dg(j,c);
+            if (result != 0) break;
+            i += len - s.length;
+        }
+        return result;
+    }
+
+    @trusted /* @@@BUG@@@ workaround for bugzilla 4211 */
     int opApplyReverse(scope int delegate(ref dchar) dg)
     {
         int result = 0;
@@ -596,7 +628,35 @@ struct CodePoints(E)
         return result;
     }
 
+    @safe /* @@@BUG@@@ workaround for bugzilla 4211 */
+    int opApplyReverse(scope int delegate(ref dchar)@safe dg)
+    {
+        int result = 0;
+        while (s.length != 0)
+        {
+            dchar c = decodeReverse(s);
+            result = dg(c);
+            if (result != 0) break;
+        }
+        return result;
+    }
+
+    @trusted /* @@@BUG@@@ workaround for bugzilla 4211 */
     int opApplyReverse(scope int delegate(ref uint, ref dchar) dg)
+    {
+        int result = 0;
+        while (s.length != 0)
+        {
+            dchar c = decodeReverse(s);
+            uint i = s.length;
+            result = dg(i,c);
+            if (result != 0) break;
+        }
+        return result;
+    }
+
+    @safe /* @@@BUG@@@ workaround for bugzilla 4211 */
+    int opApplyReverse(scope int delegate(ref uint, ref dchar)@safe dg)
     {
         int result = 0;
         while (s.length != 0)
@@ -612,20 +672,20 @@ struct CodePoints(E)
 
 struct CodeUnits(E)
 {
+@safe:
     E[] s;
 
-    static CodeUnits opCall(dchar d)
+    this(dchar d)
     in
     {
         assert(isValidCodePoint(d));
     }
     body
     {
-        CodeUnits codeUnits;
-        codeUnits.s = encode!(E)(d);
-        return codeUnits;
+        s = encode!(E)(d);
     }
 
+    @trusted /* @@@BUG@@@ workaround for bugzilla 4211 */
     int opApply(scope int delegate(ref E) dg)
     {
         int result = 0;
@@ -637,7 +697,32 @@ struct CodeUnits(E)
         return result;
     }
 
+    @safe /* @@@BUG@@@ workaround for bugzilla 4211 */
+    int opApply(scope int delegate(ref E)@safe dg)
+    {
+        int result = 0;
+        foreach(E c;s)
+        {
+            result = dg(c);
+            if (result != 0) break;
+        }
+        return result;
+    }
+
+    @trusted /* @@@BUG@@@ workaround for bugzilla 4211 */
     int opApplyReverse(scope int delegate(ref E) dg)
+    {
+        int result = 0;
+        foreach_reverse(E c;s)
+        {
+            result = dg(c);
+            if (result != 0) break;
+        }
+        return result;
+    }
+
+    @safe /* @@@BUG@@@ workaround for bugzilla 4211 */
+    int opApplyReverse(scope int delegate(ref E)@safe dg)
     {
         int result = 0;
         foreach_reverse(E c;s)

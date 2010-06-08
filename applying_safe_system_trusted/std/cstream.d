@@ -152,6 +152,7 @@ class CFile : Stream {
     }
 
     // run a few tests
+    @trusted
     unittest {
         FILE* f = fopen("stream.txt","w");
         assert(f !is null);

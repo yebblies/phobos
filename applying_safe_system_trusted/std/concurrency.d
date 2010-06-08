@@ -1,7 +1,7 @@
 /**
  * This is a low-level messaging API upon which more structured or restrictive
  * APIs may be built.  The general idea is that every messageable entity is
- * represtented by a common handle type (called a Cid in this implementation),
+ * represented by a common handle type (called a Cid in this implementation),
  * which allows messages to be sent to in-process threads, on-host processes,
  * and foreign-host processes using the same interface.  This is an important
  * aspect of scalability because it allows the components of a program to be
@@ -70,9 +70,9 @@ class MessageMismatch : Exception
 struct Tid
 {
 @safe: /* @@@BUG@@@ workaround for bugzilla 4211 */
-    void send(T...)( Tid tid, T vals )
+    void send(T...)( T vals )
     {
-        _send( tid, vals );
+        _send( this, vals );
     }
     
 
@@ -106,6 +106,7 @@ private:
  * Returns:
  *  A Tid representing the new context.
  */
+@trusted
 Tid spawn(T...)( void function(T) fn, T args )
 {
     // TODO: MessageList and &exec should be shared.
@@ -170,23 +171,34 @@ void receive(T...)( T ops )
 }
 
 
+private template receiveOnlyRet(T...)
+{
+    static if( T.length == 1 )
+        alias T[0] receiveOnlyRet;
+    else
+        alias Tuple!(T) receiveOnlyRet;
+}
+
 /**
  *
  */
-Tuple!(T) receiveOnly(T...)()
+receiveOnlyRet!(T) receiveOnly(T...)()
 {
     Tuple!(T) ret;
 
     _receive( ( T val )
               {
-                  foreach( i, v; ret.Types )
-                      ret.field[i] = val[i];
+                  static if( T.length )
+                      ret.field = val;
               },
               ( Variant val )
               {
                   throw new MessageMismatch;
               } );
-    return ret;
+    static if( T.length == 1 )
+        return ret.field[0];
+    else
+        return ret;
 }
 
 
@@ -264,6 +276,35 @@ private bool _receive(T...)( T ops )
         mbox.get( &get );
         return true;
     }
+}
+
+
+/**
+ *
+ */
+enum OnCrowding
+{
+    block,          ///
+    throwException, ///
+    ignore          ///
+}
+
+
+/**
+ *
+ */
+void setMaxMailboxSize( Tid tid, size_t messages, OnCrowding doThis )
+{
+    
+}
+
+
+/**
+ *
+ */
+void setMaxMailboxSize( Tid tid, size_t messages, bool function(Tid) onCrowdingDoThis )
+{
+    
 }
 
 

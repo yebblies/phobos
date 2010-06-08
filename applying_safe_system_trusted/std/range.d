@@ -1203,7 +1203,7 @@ struct Take(R) if (isInputRange!(R))
 private:
     R _input;
     size_t _maxAvailable;
-    enum bool byRef = is(typeof(&(R.init[0])));
+    enum bool byRef = is(typeof(&_input.front) == ElementType!(R)*);
 
 public:
     alias R Source;
@@ -1220,7 +1220,9 @@ public:
 
     void popFront()
     {
-        enforce(_maxAvailable > 0);
+        enforce(_maxAvailable > 0,
+            "Attempting to popFront() past the end of a "
+            ~ Take.stringof);
         _input.popFront;
         --_maxAvailable;
     }
@@ -1230,7 +1232,9 @@ public:
         (byRef ? "ref " : "")~
         q{ElementType front()
         {
-            enforce(_maxAvailable > 0);
+            enforce(_maxAvailable > 0,
+                "Attempting to fetch the front of an empty "
+                ~ Take.stringof);
             return _input.front;
         }});
 
@@ -1240,12 +1244,6 @@ public:
         {
             return _maxAvailable;
         }
-
-        void popBack()
-        {
-            enforce(_maxAvailable);
-            --_maxAvailable;
-        }
     }
     else static if (hasLength!(R))
     {
@@ -1253,57 +1251,40 @@ public:
         {
             return min(_maxAvailable, _input.length);
         }
+    }
 
-        static if (isBidirectionalRange!(R))
+    static if (isRandomAccessRange!(R) && (hasLength!(R) || isInfinite!(R)))
+    {
+        void popBack()
         {
-            void popBack()
-            {
-                if (_maxAvailable > _input.length)
-                {
-                    --_maxAvailable;
-                }
-                else
-                {
-                    _input.popBack;
-                }
-            }
+            enforce(_maxAvailable > 0,
+                "Attempting to popBack() past the beginning of a "
+                ~ Take.stringof);
+            --_maxAvailable;
         }
+
+        mixin(
+            (byRef ? "ref " : "")~
+            q{/+auto ref+/ ElementType back()
+            {
+                return _input[this.length - 1];
+            }});
     }
 
     static if (isRandomAccessRange!(R))
     {
         mixin(
             (byRef ? "ref " : "")~
-            q{ElementType opIndex(uint index)
-                {
-                    enforce(_maxAvailable > index);
-                    return _input[index];
-                }
-            });
+            q{/+auto ref+/ ElementType opIndex(size_t index)
+            {
+                enforce(index < this.length,
+                    "Attempting to index out of the bounds of a "
+                    ~ Take.stringof);
+                return _input[index];
+            }});
     }
 
-    static if (isBidirectionalRange!(R))
-    {
-        mixin(
-            (byRef ? "ref " : "")~
-            q{ElementType back()
-                {
-                    return _input.back;
-                }
-            });
-    }
-    else static if (isRandomAccessRange!(R) && isInfinite!(R))
-    {
-        // Random access but not bidirectional could happen in the
-        // case of e.g. some infinite ranges
-        mixin(
-            (byRef ? "ref " : "")~
-            q{ElementType back()
-                {
-                    return _input[length - 1];
-                }
-            });
-    }
+    Take opSlice() { return this; }
 }
 
 /// Ditto
@@ -1319,6 +1300,7 @@ unittest
     assert(s.length == 5);
     assert(s[4] == 5);
     assert(equal(s, [ 1, 2, 3, 4, 5 ][]));
+    assert(equal(retro(s), [ 5, 4, 3, 2, 1 ][]));
 }
 
 /**
@@ -1418,9 +1400,9 @@ struct Repeat(T)
     /// Ditto
     enum bool empty = false;
     /// Ditto
-    void popFront() const {}
+    void popFront() {}
     /// Ditto
-    void popBack() const {}
+    void popBack() {}
     /// Ditto
     ref T opIndex(uint) { return _value; }
 }

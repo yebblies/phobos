@@ -261,7 +261,7 @@ class Protocol
     void populate(protoent* proto)
     {
         type = cast(ProtocolType)proto.p_proto;
-        name = to!string(proto.p_name).idup;
+        name = to!string(proto.p_name);
 
         int i;
         for(i = 0;; i++)
@@ -275,8 +275,8 @@ class Protocol
             aliases = new string[i];
             for(i = 0; i != aliases.length; i++)
             {
-        aliases[i] =
-            to!string(proto.p_aliases[i]).idup;
+                aliases[i] =
+                    to!string(proto.p_aliases[i]).idup;
             }
         }
         else
@@ -751,9 +751,10 @@ class InternetAddress: Address
             if(!ih.getHostByName(addr))
                 //throw new AddressException("Invalid internet address");
                 throw new AddressException(
-                 "Unable to resolve host '" ~ addr ~ "'");
+                    "Unable to resolve host '" ~ addr ~ "'");
             uiaddr = ih.addrList[0];
         }
+        sin.sin_family = AddressFamily.INET;
         sin.sin_addr.s_addr = htonl(uiaddr);
         sin.sin_port = htons(port);
     }
@@ -766,6 +767,7 @@ class InternetAddress: Address
     @trusted
     this(uint addr, ushort port)
     {
+        sin.sin_family = AddressFamily.INET;
         sin.sin_addr.s_addr = htonl(addr);
         sin.sin_port = htons(port);
     }
@@ -774,6 +776,7 @@ class InternetAddress: Address
     @trusted
     this(ushort port)
     {
+        sin.sin_family = AddressFamily.INET;
         sin.sin_addr.s_addr = 0; //any, "0.0.0.0"
         sin.sin_port = htons(port);
     }

@@ -240,7 +240,7 @@ enum real SQRT1_2 =    0.70710678118654752440;  /** $(SQRT)$(HALF) */
  * For complex numbers, abs(z) = sqrt( $(POWER z.re, 2) + $(POWER z.im, 2) )
  * = hypot(z.re, z.im).
  */
-@trusted /* for intrinsic operation */
+@safe
 pure nothrow Num abs(Num)(Num x)
     if (is(typeof(Num.init >= 0)) && is(typeof(-Num.init)) &&
             !(is(Num* : const(ifloat*)) || is(Num* : const(idouble*))
@@ -260,7 +260,7 @@ pure nothrow auto abs(Num)(Num z)
 }
 
 /** ditto */
-@trusted /* for intrinsic operation */
+@safe
 pure nothrow real abs(Num)(Num y)
     if (is(Num* : const(ifloat*)) || is(Num* : const(idouble*))
             || is(Num* : const(ireal*)))
@@ -268,7 +268,7 @@ pure nothrow real abs(Num)(Num y)
     return fabs(y.im);
 }
 
-@trusted /* for intrinsic operation */
+@safe
 unittest
 {
     assert(isIdentical(abs(-0.0L), 0.0L));
@@ -320,8 +320,7 @@ unittest
  *      Results are undefined if |x| >= $(POWER 2,64).
  */
 
-@system /* for intrinsic operation */
-pure nothrow real cos(real x);       /* intrinsic */
+@safe pure nothrow real cos(real x);       /* intrinsic */
 
 /***********************************
  * Returns sine of x. x is in radians.
@@ -336,8 +335,7 @@ pure nothrow real cos(real x);       /* intrinsic */
  *      Results are undefined if |x| >= $(POWER 2,64).
  */
 
-@system /* for intrinsic operation */
-pure nothrow real sin(real x);       /* intrinsic */
+@safe pure nothrow real sin(real x);       /* intrinsic */
 
 
 /***********************************
@@ -361,7 +359,7 @@ pure nothrow ireal sin(ireal y)
     return cosh(y.im)*1i;
 }
 
-@trusted /* for intrinsic operation */
+@safe
 unittest
 {
   assert(sin(0.0+0.0i) == 0.0);
@@ -386,7 +384,7 @@ pure nothrow real cos(ireal y)
     return cosh(y.im);
 }
 
-@trusted /* for intrinsic operation */
+@safe
 unittest{
     assert(cos(0.0+0.0i)==1.0);
     assert(cos(1.3L+0.0i)==cos(1.3L));
@@ -404,8 +402,7 @@ unittest{
  *      )
  */
 
-@trusted
-pure nothrow real tan(real x)
+@trusted pure nothrow real tan(real x)
 {
     version(Naked_D_InlineAsm_X86) {
     asm
@@ -445,7 +442,7 @@ Lret:
     }
 }
 
-@trusted /* for intrinsic operation */
+@safe
 unittest
 {
     static real vals[][2] =     // angle,tan
@@ -511,7 +508,7 @@ unittest
  *      $(TR $(TD $(NAN))    $(TD $(NAN))  $(TD yes))
  *  )
  */
-@trusted /* for intrinsic operation */
+@safe
 pure nothrow real acos(real x)
 {
     return atan2(sqrt(1-x*x), x);
@@ -535,7 +532,7 @@ pure nothrow float acos(float x)     { return acos(cast(real)x); }
  *      $(TR $(TD $(LT)-1.0)    $(TD $(NAN))       $(TD yes))
  *  )
  */
-@trusted /* for intrinsic operation */
+@safe
 pure nothrow real asin(real x)
 {
     return atan2(x, sqrt(1-x*x));
@@ -648,7 +645,7 @@ pure nothrow float cosh(float x)     { return cosh(cast(real)x); }
  *      $(TR $(TD $(PLUSMN)$(INFIN)) $(TD $(PLUSMN)$(INFIN)) $(TD no))
  *      )
  */
-@trusted /* for intrinsic operation */
+@safe
 pure nothrow real sinh(real x)
 {
     //  sinh(x) =  (exp(x)-exp(-x))/2;    
@@ -678,7 +675,7 @@ pure nothrow float sinh(float x)     { return sinh(cast(real)x); }
  *      $(TR $(TD $(PLUSMN)$(INFIN)) $(TD $(PLUSMN)1.0) $(TD no))
  *      )
  */
-@trusted /* for intrinsic operation */
+@safe
 pure nothrow real tanh(real x)
 {
     //  tanh(x) = (exp(x) - exp(-x))/(exp(x)+exp(-x))
@@ -699,7 +696,7 @@ private:
 /* Returns cosh(x) + I * sinh(x)
  * Only one call to exp() is performed.
  */
-@trusted /* for intrinsic operation */
+@safe
 pure nothrow creal coshisinh(real x)
 {
     // See comments for cosh, sinh.
@@ -736,7 +733,7 @@ public:
  *    $(SV  +$(INFIN),+$(INFIN))
  *  )
  */
-@trusted /* for intrinsic operation */
+@safe
 pure nothrow real acosh(real x)
 {
     if (x > 1/real.epsilon)
@@ -776,7 +773,7 @@ unittest
  *    $(SV  $(PLUSMN)$(INFIN),$(PLUSMN)$(INFIN))
  *    )
  */
-@trusted /* for intrinsic operation */
+@safe
 pure nothrow real asinh(real x)
 {
     return (fabs(x) > 1 / real.epsilon)
@@ -845,8 +842,7 @@ unittest
  * greater than long.max, the result is
  * indeterminate.
  */
-@system /* for intrinsic operation */
-pure nothrow long rndtol(real x);    /* intrinsic */
+@safe pure nothrow long rndtol(real x);    /* intrinsic */
 
 
 /*****************************************
@@ -868,15 +864,14 @@ extern (C) real rndtonl(real x);
  *      )
  */
 
-@system /* for intrinsic operation */
-pure nothrow
+@safe pure nothrow
 {
     float sqrt(float x);    /* intrinsic */
     double sqrt(double x);  /* intrinsic */ /// ditto
     real sqrt(real x);      /* intrinsic */ /// ditto
 }
 
-@trusted /* for intrinsic operation */
+@safe
 pure nothrow creal sqrt(creal z)
 {
     creal c;
@@ -1149,7 +1144,7 @@ unittest{
     assert(exp(3.0L) == E*E*E);
 }
 
-@trusted /* for intrinsic operation */
+@safe
 unittest
 {    
     FloatingPointControl ctrl;
@@ -1241,7 +1236,7 @@ pure nothrow creal expi(real y)
     }
 }
 
-@trusted /* for intrinsic operation */
+@safe
 unittest
 {
     assert(expi(1.3e5L) == cos(1.3e5L) + sin(1.3e5L) * 1i);
@@ -1436,10 +1431,9 @@ alias core.stdc.math.FP_ILOGBNAN FP_ILOGBNAN;
  * References: frexp
  */
 
-@system /* for intrinsic operation */
-pure nothrow real ldexp(real n, int exp);    /* intrinsic */
+@safe pure nothrow real ldexp(real n, int exp);    /* intrinsic */
 
-@trusted /* for intrinsic operation */
+@safe
 unittest {
     assert(ldexp(1, -16384) == 0x1p-16384L);
     assert(ldexp(1, -16382) == 0x1p-16382L);
@@ -1494,7 +1488,7 @@ pure nothrow real log10(real x)
         return core.stdc.math.log10l(x);
 }
 
-@trusted /* for intrinsic operation */
+@safe
 unittest
 {
     //printf("%Lg\n", log10(1000) - 3);
@@ -1516,7 +1510,7 @@ unittest
  *  )
  */
 
-@trusted /* for intrinsic operation */
+@safe
 pure nothrow real log1p(real x) {
     version(INLINE_YL2X)
     {
@@ -1638,8 +1632,7 @@ real cbrt(real x)               { return core.stdc.math.cbrtl(x); }
  *      $(TR $(TD $(PLUSMN)$(INFIN)) $(TD +$(INFIN)) )
  *      )
  */
-@system /* for intrinsic operation */
-pure nothrow real fabs(real x);      /* intrinsic */
+@safe pure nothrow real fabs(real x);      /* intrinsic */
 
 
 /***********************************************************************
@@ -1660,7 +1653,7 @@ pure nothrow real fabs(real x);      /* intrinsic */
  *  $(TR $(TD $(PLUSMNINF)) $(TD $(NAN))       $(TD +$(INFIN))   $(TD no))
  *  )
  */
-@trusted /* for intrinsic operation */
+@safe
 pure nothrow real hypot(real x, real y)
 {
     // Scale x and y to avoid underflow and overflow.
@@ -1710,7 +1703,7 @@ pure nothrow real hypot(real x, real y)
     return sqrt(u*u + v*v);
 }
 
-@trusted /* for intrinsic operation */
+@safe
 unittest
 {
     static real vals[][3] =     // x,y,hypot
@@ -1846,8 +1839,7 @@ real nearbyint(real x) { return core.stdc.math.nearbyintl(x); }
  * $(B nearbyint) performs
  * the same operation, but does not set the FE_INEXACT exception.
  */
-@system /* for intrinsic operation */
-pure nothrow real rint(real x);      /* intrinsic */
+@safe pure nothrow real rint(real x);      /* intrinsic */
 
 /***************************************
  * Rounds x to the nearest integer value, using the current rounding
@@ -3658,7 +3650,7 @@ unittest
    only if the ranges have the same number of elements and if $(D
    approxEqual) evaluates to $(D true) for each pair of elements.
  */
-@trusted /* for intrinsic operation */
+@safe
 bool approxEqual(T, U, V)(T lhs, U rhs, V maxRelDiff, V maxAbsDiff = 1e-5)
 {
     static if (isInputRange!T)
@@ -3735,8 +3727,8 @@ alias isInfinity isinf;
  * translate to a single x87 instruction.
  */
 
-pure nothrow real yl2x(real x, real y);         // y * log2(x)
-pure nothrow real yl2xp1(real x, real y);       // y * log2(x + 1)
+@safe pure nothrow real yl2x(real x, real y);         // y * log2(x)
+@safe pure nothrow real yl2xp1(real x, real y);       // y * log2(x + 1)
 
 unittest
 {

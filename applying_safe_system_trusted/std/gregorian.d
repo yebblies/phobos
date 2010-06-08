@@ -16,10 +16,10 @@ Distributed under the Boost Software License, Version 1.0.
 module std.gregorian;
 
 @trusted:
+version(posix) import core.sys.posix.time;
 
 
 import std.typecons;
-import core.sys.posix.time;
 import std.conv;
 version(unittest) import std.stdio;
 
@@ -343,9 +343,12 @@ struct Date
         }
     }
 
-    tm toTm()
+    static if (is(tm))
     {
-        assert(0);
+        tm toTm()
+        {
+            assert(0);
+        }
     }
 
     private ulong days_;
@@ -403,7 +406,10 @@ Date dayClockUniversalDay()
     return result;
 }
 
-Date dateFromTm(tm)
+static if (is(tm))
 {
-    assert(0);
+    Date dateFromTm(tm)
+    {
+        assert(0);
+    }
 }

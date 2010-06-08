@@ -18,9 +18,6 @@
  * Distributed under the Boost Software License, Version 1.0.
  *    (See accompanying file LICENSE_1_0.txt or copy at
  *          http://www.boost.org/LICENSE_1_0.txt)
- *
- * Macros:
- *   EM = <em>$0</em>
  */
 module std.traits;
 @safe:
@@ -161,7 +158,7 @@ unittest
 Get, as a tuple, the types of the parameters to a function, a pointer
 to function, a delegate, a struct with an $(D opCall), a pointer to a
 struct with an $(D opCall), or a class with an $(D opCall).
- 
+
 Example:
 ---
 import std.traits;
@@ -502,8 +499,8 @@ static assert(is( FunctionTypeOf!(C.value) == function ));
 --------------------
 
 Note:
-Do not confuse function types with function $(EM pointer) types; function types
-are usually used for compile-time reflection purposes.
+Do not confuse function types with function pointer types; function types are
+usually used for compile-time reflection purposes.
  */
 template FunctionTypeOf(func...)
     if (func.length == 1 && isCallable!(func))
@@ -906,7 +903,8 @@ private template hasObjects(T...)
     }
     else
     {
-        enum hasObjects = is(T[0] == class) || hasObjects!(T[1 .. $]);
+        enum hasObjects = (is(T[0] == class) && !is(T[0] == immutable)) ||
+            hasObjects!(T[1 .. $]);
     }
 }
 
@@ -929,6 +927,8 @@ unittest
     static assert(hasAliasing!(S1));
     struct S2 { string a; }
     static assert(!hasAliasing!(S2));
+    struct S3 { int a; immutable Object b; }
+    static assert(!hasAliasing!(S3));
 }
 
 //::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::://
@@ -939,7 +939,7 @@ unittest
  * Get a $(D_PARAM TypeTuple) of the base class and base interfaces of
  * this class or interface. $(D_PARAM BaseTypeTuple!(Object)) returns
  * the empty type tuple.
- * 
+ *
  * Example:
  * ---
  * import std.traits, std.typetuple, std.stdio;
@@ -1319,7 +1319,7 @@ unittest
 
 
 //::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::://
-// Type Convertion
+// Type Conversion
 //::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::://
 
 /**
@@ -1541,7 +1541,7 @@ private template isCovariantWithImpl(Upr, Lwr)
      * Check for function attributes:
      *  - require exact match for ref and @property
      *  - overrider can add pure and nothrow, but can't remove them
-     *  - trust: ?
+     *  - @safe and @trusted are covariant with each other, unremovable
      */
     template checkAttributes()
     {
@@ -1550,12 +1550,12 @@ private template isCovariantWithImpl(Upr, Lwr)
         enum lwrAtts = functionAttributes!(Lwr);
         //
         enum WANT_EXACT = FA.REF | FA.PROPERTY;
-        enum TRUST = FA.SAFE | FA.TRUSTED;
+        enum SAFETY = FA.SAFE | FA.TRUSTED;
         enum ok =
-            ((uprAtts & WANT_EXACT) == (lwrAtts & WANT_EXACT)) &&
-            ((uprAtts & FA.PURE   ) >= (lwrAtts & FA.PURE   )) &&
-            ((uprAtts & FA.NOTHROW) >= (lwrAtts & FA.NOTHROW)) &&
-            ((uprAtts & TRUST     ) >= (lwrAtts & TRUST     )) ;  // XXX
+            (  (uprAtts & WANT_EXACT) ==   (lwrAtts & WANT_EXACT)) &&
+            (  (uprAtts & FA.PURE   ) >=   (lwrAtts & FA.PURE   )) &&
+            (  (uprAtts & FA.NOTHROW) >=   (lwrAtts & FA.NOTHROW)) &&
+            (!!(uprAtts & SAFETY    ) >= !!(lwrAtts & SAFETY    )) ;
     }
     /*
      * Check for return type: usual implicit convertion.
@@ -1649,7 +1649,7 @@ unittest
     static assert(isCovariantWith!(DerivC_1.test, BaseC.test));
     static assert(! isCovariantWith!(BaseC.test, DerivC_1.test));
 
-    // trust
+    // increasing safety
     interface BaseE            {          void test()         ; }
     interface DerivE_1 : BaseE { override void test() @safe   ; }
     interface DerivE_2 : BaseE { override void test() @trusted; }
@@ -1657,6 +1657,20 @@ unittest
     static assert(isCovariantWith!(DerivE_2.test, BaseE.test));
     static assert(! isCovariantWith!(BaseE.test, DerivE_1.test));
     static assert(! isCovariantWith!(BaseE.test, DerivE_2.test));
+
+    // @safe and @trusted
+    interface BaseF
+    {
+        void test1() @safe;
+        void test2() @trusted;
+    }
+    interface DerivF : BaseF
+    {
+        override void test1() @trusted;
+        override void test2() @safe;
+    }
+    static assert(isCovariantWith!(DerivF.test1, BaseF.test1));
+    static assert(isCovariantWith!(DerivF.test2, BaseF.test2));
 }
 
 
@@ -2010,6 +2024,40 @@ unittest
 
 
 /**
+Detect whether symbol or type $(D T) is a function pointer.
+ */
+template isFunctionPointer(T...)
+    if (T.length == 1)
+{
+    static if (is(T[0] U) || is(typeof(T[0]) U))
+    {
+        static if (is(U F : F*) && is(F == function))
+            enum bool isFunctionPointer = true;
+        else
+            enum bool isFunctionPointer = false;
+    }
+    else
+        enum bool isFunctionPointer = false;
+}
+
+unittest
+{
+    static void foo() {}
+    void bar() {}
+
+    auto fpfoo = &foo;
+    static assert(isFunctionPointer!(fpfoo));
+    static assert(isFunctionPointer!(void function()));
+
+    auto dgbar = &bar;
+    static assert(! isFunctionPointer!(dgbar));
+    static assert(! isFunctionPointer!(void delegate()));
+    static assert(! isFunctionPointer!(foo));
+    static assert(! isFunctionPointer!(bar));
+}
+
+
+/**
 Detect whether symbol or type $(D T) is a function, a function pointer or a delegate.
  */
 template isSomeFunction(T...)
@@ -2063,7 +2111,7 @@ unittest
 
 
 /**
-Detect whether $(D T) is a callable object, which can be $(EM called) with the
+Detect whether $(D T) is a callable object, which can be called with the
 function call operator $(D $(LPAREN)...$(RPAREN)).
  */
 template isCallable(T...)
@@ -2304,7 +2352,7 @@ unittest
 Returns the mangled name of symbol or type $(D sth).
 
 $(D mangledName) is the same as builtin $(D .mangleof) property, except that
-the $(EM correct) names of property functions are obtained.
+the correct names of property functions are obtained.
 --------------------
 module test;
 import std.traits : mangledName;
@@ -2375,10 +2423,13 @@ private string removeDummyEnvelope(string s)
 unittest
 {
     typedef int MyInt;
+    MyInt test() { return 0; }
     class C { int value() @property { return 0; } }
     static assert(mangledName!(int) == int.mangleof);
     static assert(mangledName!(C) == C.mangleof);
     static assert(mangledName!(MyInt)[$ - 7 .. $] == "T5MyInt");
+    //static assert(mangledName!(test)[$ - 7 .. $] == "T5MyInt");
+        // seems bug in dmd: the preceding T is omitted
     static assert(mangledName!(C.value)[$ - 12 .. $] == "5valueMFNdZi");
     static assert(mangledName!(mangledName) == "3std6traits11mangledName");
     static assert(mangledName!(removeDummyEnvelope) ==
