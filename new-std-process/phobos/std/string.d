@@ -100,7 +100,7 @@ int cmp(C1, C2)(in C1[] s1, in C2[] s2)
         size_t i1, i2;
         for (;;)
         {
-            if (i1 == s1.length) return s2.length - i2;
+            if (i1 == s1.length) return i2 - s2.length;
             if (i2 == s2.length) return s1.length - i1;
             immutable c1 = std.utf.decode(s1, i1),
                 c2 = std.utf.decode(s2, i2);
@@ -128,13 +128,19 @@ unittest
     assert(result < 0);
     result = cmp("bbc", "abc"w);
     assert(result > 0);
+    result = cmp("aaa", "aaaa"d);
+    assert(result < 0);
+    result = cmp("aaaa", "aaa"d);
+    assert(result > 0);
+    result = cmp("aaa", "aaa"d);
+    assert(result == 0);
 }
 
 /*********************************
  * ditto
  */
 
-int icmp(in char[] s1, in char[] s2)
+int icmp(C1, C2)(in C1[] s1, in C2[] s2)
 {
     size_t i1, i2;
     for (;;)
@@ -160,8 +166,8 @@ unittest
     assert(result == 0);
     result = icmp("ABC", "abc");
     assert(result == 0);
-    result = icmp(null, null);
-    assert(result == 0);
+//    result = icmp(null, null);        // Commented out since icmp()
+//    assert(result == 0);              // has become templated.
     result = icmp("", "");
     assert(result == 0);
     result = icmp("abc", "abcd");
@@ -172,6 +178,26 @@ unittest
     assert(result < 0);
     result = icmp("bbc", "abc");
     assert(result > 0);
+    result = icmp("abc", "abc"w);
+    assert (result == 0);
+    result = icmp("ABC"w, "abc");
+    assert (result == 0);
+    result = icmp("", ""w);
+    assert (result == 0);
+    result = icmp("abc"w, "abcd");
+    assert(result < 0);
+    result = icmp("abcd", "abc"w);
+    assert(result > 0);
+    result = icmp("abc", "abd");
+    assert(result < 0);
+    result = icmp("bbc"w, "abc");
+    assert(result > 0);
+    result = icmp("aaa", "aaaa"d);
+    assert(result < 0);
+    result = icmp("aaaa"w, "aaa"d);
+    assert(result > 0);
+    result = icmp("aaa"d, "aaa"w);
+    assert(result == 0);
 }
 
 /*********************************
@@ -271,8 +297,8 @@ CaseSensitive.yes) means the searches are case sensitive.
 
 Returns: Index in $(D s) where $(D c) is found, -1 if not found.
  */
-
 int indexOf(Char)(in Char[] s, dchar c, CaseSensitive cs = CaseSensitive.yes)
+if (isSomeString!(Char[]))
 {
     if (cs == CaseSensitive.yes)
     {
@@ -742,11 +768,23 @@ unittest
 
 S tolower(S)(S s) if (isSomeString!S)
 {
-    alias typeof(s[0]) Char;
-    int changed;
-    Unqual!(Char)[] r;
-
-    for (size_t i = 0; i < s.length; i++)
+    foreach (i, dchar c; s)
+    {
+        if (!std.uni.isUniUpper(c)) continue;
+        auto result = s[0.. i].dup;
+        foreach (dchar c; s[i .. $])
+        {
+            if (std.uni.isUniUpper(c))
+            {
+                c = std.uni.toUniLower(c);
+            }
+            result ~= c;
+        }
+        return cast(S) result;
+    }
+    return s;
+/*
+    foreach (i; 0 .. s.length)
     {
         auto c = s[i];
         if ('A' <= c && c <= 'Z')
@@ -783,7 +821,8 @@ S tolower(S)(S s) if (isSomeString!S)
             break;
         }
     }
-    return changed ? assumeUnique(r) : s;
+    return changed ? cast(S) r : s;
+*/
 }
 
 /**
@@ -829,7 +868,7 @@ unittest
     string s2;
 
     s2 = tolower(s1);
-    assert(cmp(s2, "fol") == 0);
+    assert(cmp(s2, "fol") == 0, s2);
     assert(s2 != s1);
 
     char[] s3 = s1.dup;
@@ -1263,14 +1302,15 @@ unittest
 
 auto splitter(String)(String s) if (isSomeString!String)
 {
-    return std.regex.splitter(s, regex("[ \t\n\r]+"));
+    //return std.regex.splitter(s, regex("[ \t\n\r]+"));
+    return std.algorithm.splitter!isspace(s);
 }
 
 unittest
 {
     auto a = " a     bcd   ef gh ";
-    //foreach (e; splitter(a)) writeln(e);
-    assert(equal(splitter(a), ["", "a", "bcd", "ef", "gh", ""][]));
+    //foreach (e; splitter(a)) writeln("[", e, "]");
+    assert(equal(splitter(a), ["", "a", "bcd", "ef", "gh"][]));
     a = "";
     assert(splitter(a).empty);
 }
@@ -1643,29 +1683,36 @@ debug unittest
  * If delimiter[] is null, removes trailing CR, LF, or CRLF, if any.
  */
 
-C[] chomp(C)(C[] s, in C[] delimiter = null)
+C[] chomp(C)(C[] s)
 {
-    if (delimiter is null)
-    {   auto len = s.length;
-
-        if (len)
-        {   auto c = s[len - 1];
-
-            if (c == '\r')          // if ends in CR
-                len--;
-            else if (c == '\n')         // if ends in LF
-            {
-                len--;
-                if (len && s[len - 1] == '\r')
-                    len--;          // remove CR-LF
-            }
-        }
-        return s[0 .. len];
-    }
-    else if (s.length >= delimiter.length)
+    auto len = s.length;
+    if (!len)
     {
-        if (s[$ - delimiter.length .. $] == delimiter)
-            return s[0 .. $ - delimiter.length];
+        return s;
+    }
+    auto c = s[len - 1];
+    if (c == '\r')          // if ends in CR
+        len--;
+    else if (c == '\n')         // if ends in LF
+    {
+        len--;
+        if (len && s[len - 1] == '\r')
+            len--;          // remove CR-LF
+    }
+    else
+    {
+        // no change
+        return s;
+    }
+    return s[0 .. len];
+}
+
+/// Ditto
+C[] chomp(C, C1)(C[] s, in C1[] delimiter)
+{
+    if (endsWith(s, delimiter))
+    {
+        return s[0 .. $ - delimiter.length];
     }
     return s;
 }
@@ -2813,24 +2860,24 @@ unittest
 string removechars(string s, in string pattern)
 {
     char[] r;
-    bool changed;
+    bool changed = false;
 
-    //writefln("removechars(%s, %s)", s, pattern);
     foreach (size_t i, dchar c; s)
     {
-        if (inPattern(c, pattern)) continue;
-        if (!changed)
-        {   changed = true;
-            r = s[0 .. i].dup;
+        if (inPattern(c, pattern)){
+                if (!changed)
+                {   changed = true;
+                    r = s[0 .. i].dup;
+                }
+                continue;
         }
         if (changed)
         {
             std.utf.encode(r, c);
         }
     }
-    return assumeUnique(r);
+    return (changed? assumeUnique(r) : s);
 }
-
 unittest
 {
     debug(string) printf("std.string.removechars.unittest\n");
@@ -2843,6 +2890,8 @@ unittest
     assert(r == "hell wld");
     r = removechars("hello world", "d");
     assert(r == "hello worl");
+    r = removechars("hah", "h");
+    assert(r == "a");
 }
 
 
@@ -4051,6 +4100,7 @@ deprecated int find(in char[] str, in char[] sub)
     return indexOf(str, sub, CaseSensitive.yes);
 }
 
+deprecated
 unittest
 {
     string a = "abc";

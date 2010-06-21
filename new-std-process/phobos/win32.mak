@@ -60,7 +60,8 @@ DOC=..\..\html\d\phobos
 
 ## Location of druntime tree
 
-DRUNTIME=..\druntime
+#DRUNTIME=..\druntime
+DRUNTIME=c:\dmd2\src\druntime
 DRUNTIMELIB=$(DRUNTIME)\lib\druntime.lib
 
 .c.obj:
@@ -92,7 +93,7 @@ OBJS= Czlib.obj Dzlib.obj \
 #	ti_bit.obj ti_Abit.obj
 
 SRCS= std\math.d std\stdio.d std\dateparse.d std\date.d std\uni.d std\string.d \
-	std\atomics.d std\base64.d std\md5.d std\xml.d std\bigint.d std\regexp.d \
+	std\base64.d std\md5.d std\xml.d std\bigint.d std\regexp.d \
 	std\compiler.d std\cpuid.d std\format.d std\demangle.d \
 	std\path.d std\file.d std\outbuffer.d std\utf.d std\uri.d \
 	std\ctype.d std\random.d std\mmfile.d \
@@ -105,9 +106,9 @@ SRCS= std\math.d std\stdio.d std\dateparse.d std\date.d std\uni.d std\string.d \
 	std\complex.d \
 	std\process.d \
 	std\system.d \
-	std\iterator.d std\encoding.d std\variant.d \
+	std\encoding.d std\variant.d \
 	std\stream.d std\socket.d std\socketstream.d \
-	std\perf.d std\conv.d \
+	std\perf.d std\container.d std\conv.d \
 	std\zip.d std\cstream.d std\loader.d \
 	std\__fileinit.d \
 	std\datebase.d \
@@ -115,6 +116,9 @@ SRCS= std\math.d std\stdio.d std\dateparse.d std\date.d std\uni.d std\string.d \
 	std\stdarg.d \
 	std\stdint.d \
 	std\json.d \
+	std\gregorian.d \
+	std\internal\math\biguintcore.d \
+	std\internal\math\biguintnoasm.d std\internal\math\biguintx86.d \
 	crc32.d \
 	std\c\process.d \
 	std\c\stdarg.d \
@@ -146,6 +150,7 @@ DOCS=	$(DOC)\object.html \
 	$(DOC)\std_compiler.html \
 	$(DOC)\std_complex.html \
 	$(DOC)\std_contracts.html \
+	$(DOC)\std_container.html \
 	$(DOC)\std_conv.html \
 	$(DOC)\std_cpuid.html \
 	$(DOC)\std_cstream.html \
@@ -158,8 +163,8 @@ DOCS=	$(DOC)\object.html \
 	$(DOC)\std_functional.html \
 	$(DOC)\std_gc.html \
 	$(DOC)\std_getopt.html \
+	$(DOC)\std_gregorian.html \
 	$(DOC)\std_intrinsic.html \
-	$(DOC)\std_iterator.html \
 	$(DOC)\std_json.html \
 	$(DOC)\std_math.html \
 	$(DOC)\std_md5.html \
@@ -210,10 +215,10 @@ DOCS=	$(DOC)\object.html \
 
 SRC=	unittest.d crc32.d phobos.d
 
-SRC_STD= std\zlib.d std\zip.d std\stdint.d std\conv.d std\utf.d std\uri.d \
+SRC_STD= std\zlib.d std\zip.d std\stdint.d std\container.d std\conv.d std\utf.d std\uri.d \
 	std\math.d std\string.d std\path.d std\date.d \
 	std\ctype.d std\file.d std\compiler.d std\system.d \
-	std\outbuffer.d std\md5.d std\atomics.d std\base64.d \
+	std\outbuffer.d std\md5.d std\base64.d \
 	std\dateparse.d std\mmfile.d \
 	std\intrinsic.d std\syserror.d \
 	std\regexp.d std\random.d std\stream.d std\process.d \
@@ -223,11 +228,11 @@ SRC_STD= std\zlib.d std\zip.d std\stdint.d std\conv.d std\utf.d std\uri.d \
 	std\signals.d std\cpuid.d std\typetuple.d std\traits.d std\bind.d \
 	std\metastrings.d std\contracts.d std\getopt.d \
 	std\variant.d std\numeric.d std\bitmanip.d std\complex.d \
-	std\functional.d std\algorithm.d std\array.d std\typecons.d std\iterator.d \
+	std\functional.d std\algorithm.d std\array.d std\typecons.d \
 	std\json.d std\xml.d std\encoding.d std\bigint.d std\concurrency.d \
 	std\range.d std\stdiobase.d \
 	std\regex.d std\datebase.d \
-	std\__fileinit.d
+	std\__fileinit.d std\gregorian.d
 
 SRC_STD_C= std\c\process.d std\c\stdlib.d std\c\time.d std\c\stdio.d \
 	std\c\math.d std\c\stdarg.d std\c\stddef.d std\c\fenv.d std\c\string.d \
@@ -242,7 +247,7 @@ SRC_STD_C_WIN= std\c\windows\windows.d std\c\windows\com.d \
 SRC_STD_C_LINUX= std\c\linux\linux.d \
 	std\c\linux\socket.d std\c\linux\pthread.d std\c\linux\termios.d \
 	std\c\linux\tipc.d
-	
+
 SRC_STD_C_OSX= std\c\osx\socket.d
 
 SRC_STD_INTERNAL_MATH= std\internal\math\biguintcore.d \
@@ -322,9 +327,6 @@ algorithm.obj : std\algorithm.d
 array.obj : std\array.d
 	$(DMD) -c $(DFLAGS) std\array.d
 
-atomics.obj : std\atomics.d
-	$(DMD) -c $(DFLAGS) -inline std\atomics.d
-
 base64.obj : std\base64.d
 	$(DMD) -c $(DFLAGS) -inline std\base64.d
 
@@ -336,7 +338,7 @@ bitmanip.obj : std\bitmanip.d
 
 boxer.obj : std\boxer.d
 	$(DMD) -c $(DFLAGS) std\boxer.d
-	
+
 concurrency.obj : std\concurrency.d
 	$(DMD) -c $(DFLAGS) std\concurrency.d
 
@@ -348,6 +350,9 @@ complex.obj : std\complex.d
 
 contracts.obj : std\contracts.d
 	$(DMD) -c $(DFLAGS) std\contracts.d
+
+container.obj : std\container.d
+	$(DMD) -c $(DFLAGS) std\container.d
 
 conv.obj : std\conv.d
 	$(DMD) -c $(DFLAGS) std\conv.d
@@ -384,9 +389,6 @@ functional.obj : std\functional.d
 
 getopt.obj : std\getopt.d
 	$(DMD) -c $(DFLAGS) std\getopt.d
-
-iterator.obj : std\iterator.d
-	$(DMD) -c $(DFLAGS) std\iterator.d
 
 json.obj : std\json.d
 	$(DMD) -c $(DFLAGS) std\json.d
@@ -484,6 +486,9 @@ Dzlib.obj : std\zlib.d
 zip.obj : std\zip.d
 	$(DMD) -c $(DFLAGS) std\zip.d
 
+bigint.obj : std\bigint.d
+	$(DMD) -c $(DFLAGS) std\bigint.d
+
 ### std\windows
 
 charset.obj : std\windows\charset.d
@@ -541,9 +546,6 @@ $(DOC)\std_algorithm.html : std.ddoc std\algorithm.d
 $(DOC)\std_array.html : std.ddoc std\array.d
 	$(DMD) -c -o- $(DFLAGS) -Df$(DOC)\std_array.html std.ddoc std\array.d
 
-$(DOC)\std_atomics.html : std.ddoc std\atomics.d
-	$(DMD) -c -o- $(DFLAGS) -Df$(DOC)\std_atomics.html std.ddoc std\atomics.d
-
 $(DOC)\std_base64.html : std.ddoc std\base64.d
 	$(DMD) -c -o- $(DFLAGS) -Df$(DOC)\std_base64.html std.ddoc std\base64.d
 
@@ -574,8 +576,11 @@ $(DOC)\std_contracts.html : std.ddoc std\contracts.d
 $(DOC)\std_conv.html : std.ddoc std\conv.d
 	$(DMD) -c -o- $(DFLAGS) -Df$(DOC)\std_conv.html std.ddoc std\conv.d
 
-$(DOC)\std_cpuid.html : std.ddoc std\cpuid.d
-	$(DMD) -c -o- $(DFLAGS) -Df$(DOC)\std_cpuid.html std.ddoc std\cpuid.d
+$(DOC)\std_container.html : $(STDDOC) std\container.d
+	$(DMD) -c -o- $(DFLAGS) -Df$(DOC)\std_container.html $(STDDOC) std\container.d
+
+$(DOC)\std_cpuid.html : $(STDDOC) std\cpuid.d
+	$(DMD) -c -o- $(DFLAGS) -Df$(DOC)\std_cpuid.html $(STDDOC) std\cpuid.d
 
 $(DOC)\std_cstream.html : std.ddoc std\cstream.d
 	$(DMD) -c -o- $(DFLAGS) -Df$(DOC)\std_cstream.html std.ddoc std\cstream.d
@@ -604,8 +609,8 @@ $(DOC)\std_gc.html : std.ddoc $(DRUNTIME)\src\core\memory.d
 $(DOC)\std_getopt.html : std.ddoc std\getopt.d
 	$(DMD) -c -o- $(DFLAGS) -Df$(DOC)\std_getopt.html std.ddoc std\getopt.d
 
-$(DOC)\std_iterator.html : std.ddoc std\iterator.d
-	$(DMD) -c -o- $(DFLAGS) -Df$(DOC)\std_iterator.html std.ddoc std\iterator.d
+$(DOC)\std_gregorian.html : $(STDDOC) std\gregorian.d
+	$(DMD) -c -o- $(DFLAGS) -Df$(DOC)\std_gregorian.html $(STDDOC) std\gregorian.d
 
 $(DOC)\std_intrinsic.html : std.ddoc std\intrinsic.d
 	$(DMD) -c -o- $(DFLAGS) -Df$(DOC)\std_intrinsic.html std.ddoc std\intrinsic.d
