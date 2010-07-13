@@ -2363,3 +2363,241 @@ private size_t readlnImpl(FILE* fps, ref char[] buf, dchar terminator = '\n')
         StdioException();
     return buf.length;
 }
+
+__EOF__
+
+import std.variant : Algebraic;
+
+version (Windows) private
+{
+    import core.sys.windows.windows;
+    import std.windows.syserror;
+
+    version (DigitalMars)
+    {
+        extern(C) extern __gshared HANDLE[_NFILE] _osfhnd;
+        @safe HANDLE peekHANDLE(FILE* f) { return _osfhnd[f._file]; }
+        version = WITH_WINDOWS_CONSOLE;
+    }
+
+    /*
+     * Returns $(D true) if $(D handle) is a valid console handle that
+     * characters can be written to.
+     */
+    @trusted bool isConsole(HANDLE handle)
+    {
+        DWORD dummy;
+
+        return GetConsoleMode(handle, &dummy) &&
+            WriteConsoleA(handle, "\0".ptr, 0, null, null);
+    }
+}
+
+
+/**
+$(D output range) that locks the file and provides writing to the
+file in the native codeset.
+ */
+struct LockingNativeTextWriter
+{
+    private
+    {
+        alias NativeTextEncoder!(UnsharedNarrowWriter) NativeWriter;
+        alias WideTextEncoder!(UnsharedWideWriter) WideWriter;
+
+        version (Windows)
+        {
+            alias WideTextEncoder!(WindowsWideConsoleWriter) ConsoleWideWriter;
+            alias Algebraic!(NativeWriter, WideWriter, ConsoleWideWriter)
+                                                       Writer;
+        }
+        else
+        {
+            alias Algebraic!(NativeWriter, WideWriter) Writer;
+        }
+
+        File   _file;
+        Writer _writer;
+    }
+
+    /**
+     * Constructs a $(D LockingNativeTextWriter) object.
+     *
+     * Params:
+     *   file =
+     *     An open $(D File) to write in.
+     *
+     * Throws:
+     * $(UL
+     *   $(LI $(D enforcement) fails if $(D file) is not open.)
+     *   $(LI $(D enforcement) fails if there is no safe mean to
+     *        convert UTF to the native codeset.)
+     * )
+     */
+    @trusted this(File file)
+    {
+        enforce(file.isOpen);
+        swap(_file, file);
+        FLOCK(_file.p.handle);
+        auto handle = cast(_iobuf*) _file.p.handle;
+
+        // prefer ConsoleWideWriter
+        version (Windows) static if (is(typeof(peekHANDLE) == function))
+        {
+            HANDLE console = peekHANDLE(_file.p.handle);
+
+            if (isConsole(console) && WindowsWideConsoleWriter.supported)
+            {
+                _file.flush(); // need to sync
+                _writer = ConsoleWideWriter(WindowsWideConsoleWriter(console));
+                return;
+            }
+        }
+
+        if (fwide(handle, 0) > 0)
+            _writer = WideWriter(UnsharedWideWriter(handle));
+        else
+            _writer = NativeWriter(UnsharedNarrowWriter(handle));
+    }
+
+    @trusted this(this)
+    {
+        FLOCK(_file.p.handle);
+    }
+
+    @trusted ~this()
+    {
+        if (_file.isOpen)
+            FUNLOCK(_file.p.handle);
+    }
+
+    @trusted void opAssign(LockingNativeTextWriter rhs)
+    {
+        swap(this, rhs);
+    }
+
+    /// Range primitive implementation.
+    @safe void put(T)(T e)
+    {
+        _writer.put(e);
+    }
+}
+
+
+/*
+Range that writes multibyte string to a locked, byte-oriented FILE* stream.
+ */
+private struct UnsharedNarrowWriter
+{
+    private _iobuf* _handle;
+
+    @trusted void put(in ubyte[] str)
+    {
+        for (const(ubyte)[] inbuf = str; inbuf.length > 0; )
+        {
+            immutable nwritten = fwrite(
+                    inbuf.ptr, 1, inbuf.length, cast(shared) _handle);
+            if (nwritten == inbuf.length)
+                break;
+            switch (errno)
+            {
+            case EINTR:
+                str = str[nwritten .. $];
+                continue;
+
+            default:
+                throw new StdioException(null);
+            }
+        }
+    }
+}
+
+
+/*
+Range that writes wide string to a locked, wide-oriented FILE* stream.
+ */
+private struct UnsharedWideWriter
+{
+    private _iobuf* _handle;
+
+    @trusted void put(wchar_t ch)
+    {
+        while (FPUTWC(ch, _handle) == WEOF)
+        {
+            switch (errno)
+            {
+            case EINTR:
+                continue;
+            default:
+                throw new StdioException(null);
+            }
+        }
+    }
+
+    @trusted void put(in wchar_t[] str)
+    {
+        foreach (ch; str)
+        {
+            while (FPUTWC(ch, _handle) == WEOF)
+            {
+                switch (errno)
+                {
+                case EINTR:
+                    continue;
+                default:
+                    throw new StdioException(null);
+                }
+            }
+        }
+    }
+}
+
+
+/*
+Range that writes wide string to a Windows console.
+ */
+version (Windows)
+private struct WindowsWideConsoleWriter
+{
+    private HANDLE _console;
+
+    @trusted void put(WCHAR wc)
+    {
+        if (!indirectWriteConsoleW(_console, &wc, 1, null, null))
+            throw new /+StdioException+/Exception(
+                sysErrorString(GetLastError()));
+    }
+
+    @trusted void put(in WCHAR[] str)
+    {
+        for (const(WCHAR)[] outbuf = str; outbuf.length > 0; )
+        {
+            DWORD nwritten;
+
+            if (!indirectWriteConsoleW(_console,
+                    outbuf.ptr, outbuf.length, &nwritten, null))
+                throw new /+StdioException+/Exception(
+                    sysErrorString(GetLastError()));
+            outbuf = outbuf[nwritten .. $];
+        }
+    }
+
+
+    /*
+     * Returns $(D true) if $(D WriteConsoleW) is supported under the
+     * running environment.
+     */
+    static @safe @property bool supported()
+    {
+        return indirectWriteConsoleW !is null;
+    }
+
+    private static __gshared typeof(&WriteConsoleW) indirectWriteConsoleW;
+
+    shared static this()
+    {
+        indirectWriteConsoleW = cast(typeof(&WriteConsoleW))
+            GetProcAddress(GetModuleHandleA("kernel32.dll"), "WriteConsoleW");
+    }
+}
+
