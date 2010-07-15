@@ -3083,3 +3083,38 @@ unittest
     assert(moveFront(r) == 43);
 }
 
+
+//----------------------------------------------------------------------------//
+// [devel] temporary
+//----------------------------------------------------------------------------//
+
+import core.stdc.stdlib : alloca;
+
+@system
+E* getNext(E, R)(ref R input, ref E store = *(cast(E*) alloca(E.sizeof)))
+{
+    static if (is(typeof(input.getNext(store)) == E*)
+            /+ @@@ +/ && !isArray!(R))
+    {
+        return input.getNext(store);
+    }
+    else
+    {
+        if (input.empty)
+            return null;
+
+        static if (is(typeof(&(0, input.front)) == E*))
+        {
+            auto p = &(0, input.front);
+            input.popFront;
+            return p;
+        }
+        else
+        {
+            store = input.front;
+            input.popFront;
+            return &store;
+        }
+    }
+}
+
