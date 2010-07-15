@@ -199,7 +199,6 @@ version (USE_ICONV)
 
 
 /*
- * - Generates wchars.
  * - Requires WinNLS.
  * - Does not handle stateful encodings such as ISO-2022.
  */
@@ -216,7 +215,7 @@ version (USE_ICONV)
 
     /*
      * Reads a next multibyte character (if any) from the source, and returns
-     * the corresponding WCHAR value in $(D result).
+     * the corresponding Unicode code point in $(D result).
      *
      * - Does not handle multibyte character sequence longer than 2 byte.
      *
@@ -224,10 +223,11 @@ version (USE_ICONV)
      *  The address of $(D result) if a character is read, or $(D null) if
      *  the source is empty.
      */
-    wchar* getNext(ref wchar result)
+    dchar* getNext(ref dchar result)
     {
         if (_context.queue.length > 0)
         {
+            // Consume extra code point queued in the internal context.
             result = _context.queue[0];
             _context.queue = _context.queue[1 .. $];
             return &result;
@@ -281,11 +281,21 @@ version (USE_ICONV)
         }
         assert(wchars.length > 0);
 
-        result = wchars[0];
+        if ((wchars[0] & 0xFC00) == 0xD800)
+        {
+            assert(wchars.length > 1);
+            result = ((wchars[0] - 0xD7C0) << 10) + (wchars[1] - 0xDC00);
+            wchars = wchars[2 .. $];
+        }
+        else
+        {
+            result = wchars[0];
+            wchars = wchars[1 .. $];
+        }
 
         // Queue the remaining code points if any.
-        if (wchars.length >= 2)
-            _context.queue = wchars[1 .. $].idup;
+        if (wchars.length > 0)
+            _context.queue = wchars.toUTF32();
 
         return &result;
     }
@@ -298,7 +308,7 @@ private:
     {
         Source  source;
         DWORD   codepage;
-        wstring queue;
+        dstring queue;
     }
 }
 
@@ -306,13 +316,13 @@ version (Windows) unittest
 {
     if (.nativeCodepage == 932)
     {
-        enum wstring witness = "\u002e\u7af9\u85ea\u3084\u3051\u305f\u002e";
+        enum dstring witness = "\u002e\u7af9\u85ea\u3084\u3051\u305f\u002e";
         auto input = cast(ubyte[]) "\x2e\x92\x7c\xe5\x4d\x82\xe2\x82\xaf\x82\xbd\x2e".dup;
         auto   r = WindowsNativeCharacterReader!(ubyte[])(input);
         size_t k = 0;
-        for (wchar w; r.getNext(w); ++k)
+        for (dchar c; r.getNext(c); ++k)
         {
-            assert(w == witness[k]);
+            assert(c == witness[k]);
         }
         assert(k == witness.length);
     }
@@ -322,7 +332,7 @@ version (Windows) unittest
 {
     if (.nativeCodepage == 1252)
     {
-        enum wstring witness =
+        enum dstring witness =
              "\u20ac\u201a\u0192\u201e\u2026\u2020\u2021\u02c6\u2030\u0160\u2039\u0152\u017d"
             ~"\u2018\u2019\u201c\u201d\u2022\u2013\u2014\u02dc\u2122\u0161\u203a\u0153\u017e\u0178";
         auto input = cast(ubyte[])
@@ -330,9 +340,9 @@ version (Windows) unittest
              ~"\x91\x92\x93\x94\x95\x96\x97\x98\x99\x9a\x9b\x9c\x9e\x9f").dup;
         auto   r = WindowsNativeCharacterReader!(ubyte[])(input);
         size_t k = 0;
-        for (wchar w; r.getNext(w); ++k)
+        for (dchar c; r.getNext(c); ++k)
         {
-            assert(w == witness[k]);
+            assert(c == witness[k]);
         }
         assert(k == 27);
     }
