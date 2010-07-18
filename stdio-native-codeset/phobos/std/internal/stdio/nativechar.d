@@ -6,21 +6,22 @@
  *      from an input range Source.
  *
  * - NativeTextWriter(Sink)
- *      Writes Unicode dchars converted to multibyte character sequences into
+ *      Writes Unicode strings converted to multibyte character sequences into
  *      an output range Sink.
- *
  *
  * Windows ... WideCharToMultiByte and MultiByteToWideChar
  *   POSIX ... iconv
  */
 module std.internal.stdio.nativechar;
 
-import std.algorithm;
+import std.algorithm : swap;
 import std.conv;
 import std.exception;
 import std.range;
-import std.string;
+import std.string    : toStringz;
+import std.traits    : isSomeString;
 import std.utf;
+import std.variant   : Algebraic;
 
 version (Windows)
 {
@@ -41,10 +42,9 @@ else version (Posix)
     import core.stdc.locale;
 
     import core.sys.posix.iconv;
-    import core.sys.posix.locale;
     import core.sys.posix.langinfo;
 
-    debug = USE_LIBICONV;
+//  debug = USE_LIBICONV;
 }
 
 
@@ -63,64 +63,54 @@ class EncodingException : Exception
 
 version (Windows)
 {
-    version = WCHART_WCHAR;
 }
-else version (linux)            // assuming glibc...
+else version (linux)
 {
-    version = WCHART_DCHAR;
-    version = HAVE_MBSTATE;
-    version = HAVE_MULTILOCALE;
-    version = HAVE_ICONV;
+    version = HAVE_ICONV;   // GNU
 }
 else version (OSX)
 {
-    version = WCHART_DCHAR;     // really?
-    version = HAVE_MBSTATE;
-    version = HAVE_MULTILOCALE;
     version = HAVE_ICONV;
 }
 else version (FreeBSD)
 {
-    version = WCHART_UNICODE_ON_UTF;
-    version = HAVE_MBSTATE;
 }
 else version (Solaris)
 {
-    version = WCHART_UNICODE_ON_UTF;
-    version = HAVE_MBSTATE;
     version = HAVE_ICONV;
 }
 else static assert(0);
 
-version (WCHART_WCHAR) version = WCHART_UNICODE;
-version (WCHART_DCHAR) version = WCHART_UNICODE;
 
-version (WCHART_UNICODE) version = WCHART_UNICODE_ON_UTF;
-
+// use libiconv for debugging
 debug (USE_LIBICONV)
 {
     version = HAVE_ICONV;
     pragma(lib, "iconv");
 }
 
-version (LittleEndian)
+// iconv codeset name for dchars
+version (HAVE_ICONV) private
 {
-    private enum ICONV_DSTRING = "UTF-32LE";
+    version (LittleEndian)
+    {
+        enum ICONV_DSTRING = "UTF-32LE";
+    }
+    else version (BigEndian)
+    {
+        enum ICONV_DSTRING = "UTF-32BE";
+    }
+    else static assert(0);
 }
-else version (BigEndian)
-{
-    private enum ICONV_DSTRING = "UTF-32BE";
-}
-else static assert(0);
 
 
 version (Windows)
 {
-    version = USE_WINNLS;
+    version = USE_WINNLS;   // MultiByteToWideChar & WideCharToMultiByte
 }
 else version (HAVE_ICONV)
 {
-    version = USE_ICONV;
+    version = USE_ICONV;    // iconv (UTF-32 <=> native)
 }
 
 
@@ -128,22 +118,29 @@ else version (HAVE_ICONV)
 // native codeset detection
 //----------------------------------------------------------------------------//
 
-version (USE_WINNLS)
+version (Windows)
 {
-    immutable DWORD nativeCodepage; // the native codepage
+    // The 'ANSI' codepage at program startup.
+    immutable DWORD nativeCodepage;
+
+    // True if the native codeset is UTF-8.
+    @safe @property pure nothrow bool isNativeUTF8()
+    {
+        return .nativeCodepage == CP_UTF8;
+    }
 
     shared static this()
     {
-        nativeCodepage = GetACP();
+        .nativeCodepage = GetACP();
     }
 }
-
-version (USE_ICONV)
+else version (Posix)
 {
-    immutable string nativeCodeset; // name of the native codeset
-    immutable bool   isIconvGNU;    // true <=> iconv by GNU
+    // The default CODESET langinfo at program startup.
+    immutable string nativeCodeset;
 
-    @safe @property pure nothrow isNativeUTF8()
+    // True if the native codeset is UTF-8.
+    @safe @property pure nothrow bool isNativeUTF8()
     {
         return .nativeCodeset == "UTF-8";
     }
@@ -154,29 +151,43 @@ version (USE_ICONV)
         setlocale(LC_CTYPE, "");
         scope(exit) setlocale(LC_CTYPE, origLoc.toStringz());
 
-        // Obtain the native codeset from the environment.
         if (auto codeset = nl_langinfo(CODESET))
-            nativeCodeset = to!string(codeset);
+            .nativeCodeset = to!string(codeset).resolveCodeset();
         else
-            nativeCodeset = "US-ASCII";
+            .nativeCodeset = "US-ASCII";
+    }
 
-        switch (nativeCodeset)
+    // CSI systems tend to return iconv-incompatible CODESET langinfo
+    private @safe nothrow string resolveCodeset(string codeset)
+    {
+        switch (codeset)
         {
-          case "646": nativeCodeset = "US-ASCII"; break;
-          case "PCK": nativeCodeset =    "CP932"; break;
-          default   : break;
+          case "646": return "US-ASCII";
+          case "PCK": return    "CP932";
+          default   : return codeset;
         }
+        assert(0);
+    }
+}
+else
+{
+    // Dunno how to detect the native codeset.
+    enum bool isNativeUTF8  = false;
+}
 
-        // Detect GNU iconv.
-        iconv_t cd = iconv_open("ASCII//TRANSLIT", "UTF-8");
 
-        if (cd == cast(iconv_t) -1)
+// Detect GNU iconv as its behavior slightly differs from the POSIX
+version (USE_ICONV)
+{
+    immutable bool isIconvGNU;      // true <=> iconv by GNU
+
+    shared static this()
+    {
+        iconv_t cd = iconv_open("ASCII//TRANSLIT", "UCS-4-INTERNAL");
+
+        if (cd != cast(iconv_t) -1)
         {
-            isIconvGNU = false;
-        }
-        else
-        {
-            isIconvGNU = true;
+            .isIconvGNU = true;
             iconv_close(cd);
         }
     }
@@ -195,16 +206,81 @@ version (USE_ICONV)
 @system struct NativeCharacterReader(Source)
 //      if (isInputRange!(Source) && is(Unqual!(ElementType!Source) == ubyte))
 {
+    this(Source source)
+    {
+        if (.isNativeUTF8)
+        {
+            // We can use our own converter in std.utf.
+            _reader = byCodePoint(AssumeUTF8(source));
+            return;
+        }
+
+        version (USE_WINNLS)
+        {
+            _reader = WindowsNativeCharacterReader!Source(source);
+        }
+        else version (USE_ICONV)
+        {
+            _reader = IconvNativeCharacterReader!Source(source);
+        }
+        else
+        {
+            throw new EncodingException("Native to Unicode codeset convertion "
+                ~"is not supported on this platform", __FILE__, __LINE__);
+        }
+    }
+
+    dchar* getNext(ref dchar store)
+    {
+        return _reader.getNext(store);
+    }
+
+
+    //----------------------------------------------------------------//
+private:
+    static @system struct AssumeUTF8
+    {
+        Source source;
+
+        char* getNext(ref char u)
+        {
+            return cast(char*) source.getNext(*cast(ubyte*) &u);
+        }
+    }
+
+    version (USE_WINNLS)
+    {
+        Algebraic!(
+                ByCodePoint!AssumeUTF8,
+                WindowsNativeCharacterReader!Source
+            ) _reader;
+    }
+    else version (USE_ICONV)
+    {
+        Algebraic!(
+                ByCodePoint!AssumeUTF8,
+                IconvNativeCharacterReader!Source
+            ) _reader;
+    }
+    else
+    {
+        ByCodePoint!AssumeUTF8 _reader;
+    }
 }
 
 
 /*
- * - Requires WinNLS.
- * - Does not handle stateful encodings such as ISO-2022.
+ * Converts native multibyte character sequence to the corresponding Unicode
+ * code point(s) with MultiByteToWideChar.
+ *
+ * This implementation can't handle stateful encodings (e.g. ISO-2022) nor
+ * longer multibyte encodings (e.g. GB18030, tri-byte EUC-JP).
  */
-@system struct WindowsNativeCharacterReader(Source)
+private @system struct WindowsNativeCharacterReader(Source)
 //      if (isInputRange!(Source) && is(Unqual!(ElementType!Source) == ubyte))
 {
+    static assert(is(WCHAR == wchar));
+
     this(Source source)
     {
         _context          = new Context;
@@ -216,8 +292,6 @@ version (USE_ICONV)
     /*
      * Reads a next multibyte character (if any) from the source, and returns
      * the corresponding Unicode code point in $(D result).
-     *
-     * - Does not handle multibyte character sequence longer than 2 byte.
      *
      * Returns:
      *  The address of $(D result) if a character is read, or $(D null) if
@@ -350,10 +424,10 @@ version (Windows) unittest
 
 
 /*
- * - Generates dchars.
- * - Requires POSIX iconv.
+ * Converts native multibyte character sequence to the corresponding Unicode
+ * code point(s) with POSIX iconv.
  */
-@system struct IconvNativeCharacterReader(Source)
+private @system struct IconvNativeCharacterReader(Source)
 //      if (isInputRange!(Source) && is(Unqual!(ElementType!Source) == ubyte))
 {
     this(Source source)
@@ -362,7 +436,8 @@ version (Windows) unittest
 
         _context         = new Context;
         _context.decoder = iconv_open(ICONV_DSTRING, encoding.toStringz());
-        errnoEnforce(_context.decoder != cast(iconv_t) -1, "iconv_open");
+        errnoEnforce(_context.decoder != cast(iconv_t) -1,
+                "starting convertion from the native codeset");
         swap(_context.source, source);
     }
 
@@ -448,7 +523,6 @@ version (Windows) unittest
                     continue;
 
                   default:
-                    // FIXME TheCorrectException
                     throw new ErrnoException("converting a native coded "
                         "character to the corresponding Unicode code point");
                 }
@@ -547,21 +621,80 @@ version (unittest)
 }
 
 /*
- * TODO
+ * Output range that writes Unicode characters to another output range $(D Sink)
+ * in the native codeset.
  */
 @system struct NativeTextWriter(Sink)
-        if (isOutputRange!(Sink, const(ubyte)[]))
+        if (isOutputRange!(Sink, ubyte[]))
 {
+    this(Sink sink)
+    {
+        if (.isNativeUTF8)
+        {
+            // We can use our own converter in std.utf.
+            _writer = writeTextIn!char(sink);
+            return;
+        }
+
+        version (USE_WINNLS)
+        {
+            _writer = writeTextIn!WCHAR(WindowsNativeTextWriter!Sink(sink));
+        }
+        else version (USE_ICONV)
+        {
+            _writer = writeTextIn!dchar(IconvNativeTextWriter!Sink(sink));
+        }
+        else
+        {
+            throw new EncodingException("Unicode to native codeset convertion "
+                ~"is not supported on this platform", __FILE__, __LINE__);
+        }
+    }
+
+    void put(S)(S str)
+        if (isSomeString!(S))
+    {
+        _writer.put(str);
+    }
+
+    void put(C = dchar)(dchar c)
+    {
+        _writer.put(c);
+    }
+
+
+    //----------------------------------------------------------------//
+private:
+    version (USE_WINNLS)
+    {
+        Algebraic!(
+                UTFTextWriter!(char, Sink),
+                UTFTextWriter!(WCHAR, WindowsNativeTextWriter!Sink)
+            ) _writer;
+
+    }
+    else version (USE_ICONV)
+    {
+        Algebraic!(
+                UTFTextWriter!(char, Sink),
+                UTFTextWriter!(dchar, IconvNativeTextWriter!Sink)
+            ) _writer;
+    }
+    else
+    {
+        UTFTextWriter!(char, Sink) _writer;
+    }
 }
 
 
 /*
- * - Consumes wstrings.
- * - Requires WinNLS.
- * - Does not handle stateful encodings such as ISO-2022.
+ * Converts wchar[]s into the corresponding native multibyte character sequences
+ * with WideCharToMultiByte.
+ *
+ * This implementation can't handle stateful encodings such as ISO-2022.
  */
-@system struct WindowsNativeTextWriter(Sink)
-        if (isOutputRange!(Sink, const(ubyte)[]))
+private @system struct WindowsNativeTextWriter(Sink)
+        if (isOutputRange!(Sink, ubyte[]))
 {
     this(Sink sink)
     {
@@ -573,7 +706,7 @@ version (unittest)
      * Converts UTF-16 string $(D wstr) to the corresponding native multibyte
      * character sequence and puts them in the $(D sink).
      */
-    void put(in wchar[] wstr)
+    void put(in WCHAR[] wstr)
     {
         if (wstr.length == 0)
             return;
@@ -673,19 +806,21 @@ version (Windows) unittest
 
 
 /*
- * - Consumes dstrings.
- * - Requires POSIX iconv.
+ * Converts dchar[]s into the corresponding multibyte character sequences with
+ * POSIX iconv.
  */
-@system struct IconvNativeTextWriter(Sink)
-        if (isOutputRange!(Sink, const(ubyte)[]))
+private @system struct IconvNativeTextWriter(Sink)
+        if (isOutputRange!(Sink, ubyte[]))
 {
     this(Sink sink)
     {
         string encoding = .nativeCodeset;
-        if (.isIconvGNU) encoding ~= "//TRANSLIT";  // for POSIX compat.
+        if (.isIconvGNU) encoding ~= "//TRANSLIT";
 
         _context         = new Context;
         _context.encoder = iconv_open(encoding.toStringz(), ICONV_DSTRING);
+        errnoEnforce(_context.encoder != cast(iconv_t) -1,
+                "starting convertion to the native codeset");
         swap(_context.sink, sink);
     }
 
@@ -731,8 +866,15 @@ version (Windows) unittest
                 switch (errno = iconvErrno)
                 {
                   case EILSEQ:
-                    throw new EncodingException(
-                        "invalid UTF sequence in the input string", __FILE__, __LINE__);
+                    if (.isIconvGNU && isValidDchar(*cast(dchar*) src))
+                    {
+                        // [workaround] GNU iconv raises EILSEQ on mapping failure
+                        src     += dchar.sizeof;
+                        srcLeft -= dchar.sizeof;
+                        continue;
+                    }
+                    throw new EncodingException("invalid Unicode code point in "
+                            ~"the input string", __FILE__, __LINE__);
 
                   case E2BIG:
                     mchars.length *= 2;
@@ -807,4 +949,5 @@ version (HAVE_ICONV) unittest
         assert(s[$ - 1] == '\x2e');
     }
 }
+
 
