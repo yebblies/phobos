@@ -206,7 +206,12 @@ template isInputRange(R)
         if (r.empty) {}  // can test for empty
         r.popFront;          // can invoke next
         auto h = r.front; // can get the front of the range
-    }()));
+    }()))
+    //--- [devel]
+    ||
+    is(typeof(R.getNext) == function)
+    //--- [/devel]
+    ;
 }
 
 unittest
@@ -432,6 +437,10 @@ template ElementType(R)
     //alias typeof({ R r; return front(r[]); }()) ElementType;
     static if (is(typeof(R.front()) T))
         alias T ElementType;
+    // ---[devel]
+    else static if (is(typeof(R.getNext) U == return) && is(U T == T*))
+        alias T ElementType;
+    // ---[/devel]
     else
         alias void ElementType;
 }
