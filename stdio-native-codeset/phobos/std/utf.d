@@ -1243,27 +1243,38 @@ version (unittest) private
     }
 }
 
-
 private alias enforceEx!UtfException enforceUTF;
+
+private ElementType!R popNext(R)(ref R r)
+in
+{
+    assert(!r.empty);
+}
+body
+{
+    auto e = r.front;
+    r.popFront;
+    return e;
+}
 
 
 /**
  * Extracts a UTF character sequence at the beginning of the input range
  * $(D source) and returns the corresponding code point.
- *
- * Returns:
- *  The code point, or $(D null) if $(D source) is empty.
  */
-@system dchar* decodeNext(R)(ref R source, ref dchar result)
+@system dchar decodeNext(R)(ref R source)
         if (isInputRange!(R) && is(ElementType!R == char))
+in
 {
-    char temp;
-    uint code;
-
-    if (auto p = getNext(source, temp))
-        code = *p;
-    else
-        return null; // empty!
+    assert(!source.empty);
+}
+out(r)
+{
+    assert(isValidDchar(r));
+}
+body
+{
+    uint code = popNext(source);
 
     immutable stride = UTF8stride[code];
     if (stride > 1)
@@ -1276,8 +1287,10 @@ private alias enforceEx!UtfException enforceUTF;
         // Decode trailing sequence of (stride-1) bytes.
         foreach (i; 1 .. stride)
         {
-            immutable char u = *enforceUTF(getNext(source, temp),
-                    "decoding trailing UTF-8 sequence past the end of " ~ R.stringof);
+            enforceUTF(!source.empty, "decoding trailing UTF-8 sequence past "
+                    ~ "the end of " ~ R.stringof);
+
+            immutable char u = popNext(source);
             enforceUTF((u & 0b11000000) == 0b10000000, "invalid UTF-8 sequence");
 
             code = (code << 6) | (u & 0b00111111);
@@ -1289,54 +1302,55 @@ private alias enforceEx!UtfException enforceUTF;
         enforceUTF(isValidDchar(code), "invalid code point decoding UTF-8");
     }
 
-    assert(isValidDchar(code));
-    result = code;
-    return &result;
+    return code;
 }
 
 /// ditto
-@system dchar* decodeNext(R)(ref R source, ref dchar result)
+@system dchar decodeNext(R)(ref R source)
         if (isInputRange!(R) && is(ElementType!R == wchar))
+in
 {
-    wchar temp;
-    uint code;
-
-    if (auto p = getNext(source, temp))
-        code = *p;
-    else
-        return null; // empty!
+    assert(!source.empty);
+}
+out(r)
+{
+    assert(isValidDchar(r));
+}
+body
+{
+    uint code = popNext(source);
 
     if ((code & 0xF800) == 0xD800)
     {
         enforceUTF((code & 0xFC00) == 0xD800, "sudden low surrogate appearance");
+        enforceUTF(!source.empty, "surrogate pair past the end of " ~ R.stringof);
 
-        immutable wchar pair = *enforceUTF(getNext(source, temp),
-                "surrogate pair past the end of " ~ R.stringof);
+        immutable wchar pair = popNext(source);
         enforceUTF((pair & 0xFC00) == 0xDC00, "expected a low surrogate");
 
         code = ((code - 0xD7C0) << 10) + (pair - 0xDC00);
     }
-
-    assert(isValidDchar(code));
-    result = code;
-    return &result;
+    return code;
 }
 
 /// ditto
-@system dchar* decodeNext(R)(ref R source, ref dchar result)
+@system dchar decodeNext(R)(ref R source)
         if (isInputRange!(R) && is(ElementType!R == dchar))
+in
 {
-    if (auto pch = getNext(source, result))
-    {
-        enforceUTF(*pch <= 0x10FFFF, "illegal code point decoding UTF-32");
-        enforceUTF((*pch & 0x1FF800) != 0xD800, "surrogate code point decoding UTF-32");
-        assert(isValidDchar(*pch));
-        return pch;
-    }
-    else
-    {
-        return null;
-    }
+    assert(!source.empty);
+}
+out(r)
+{
+    assert(isValidDchar(r));
+}
+body
+{
+    immutable dchar code = popNext(source);
+
+    if (!isValidDchar(code))
+        throw new UtfException("illegal code point decoding UTF-32", code);
+    return code;
 }
 
 unittest
@@ -1351,10 +1365,8 @@ unittest
         auto r = NaiveInput!String(witness);
         dchar c;
         size_t k = 0;
-        for (dchar* p; (p = decodeNext(r, c)) != null; ++k)
-        {
-            assert(*p == witness[k]);
-        }
+        for (; !r.empty; ++k)
+            assert(decodeNext(r) == witness[k]);
         assert(k == witness.length);
     }
 }
@@ -1391,7 +1403,7 @@ unittest
     {
         auto r = NaiveInput!string(str);
         dchar c;
-        assert(expectError_( decodeNext(r, c) ));
+        assert(expectError_( decodeNext(r) ));
     }
 }
 
@@ -1406,8 +1418,7 @@ unittest
     foreach (str; wrong)
     {
         auto r = NaiveInput!wstring(str);
-        dchar c;
-        assert(expectError_( decodeNext(r, c) ));
+        assert(expectError_( decodeNext(r) ));
     }
 }
 
@@ -1425,8 +1436,7 @@ unittest
     foreach (str; wrong)
     {
         auto r = NaiveInput!dstring(str);
-        dchar c;
-        assert(expectError_( decodeNext(r, c) ));
+        assert(expectError_( decodeNext(r) ));
     }
 }
 
@@ -1556,12 +1566,48 @@ ByCodePoint!R byCodePoint(R)(R r)
 /// ditto
 struct ByCodePoint(Source)
 {
-    Source source;
+    enum dchar NOTHING = cast(dchar) -1;
 
-    dchar* getNext(ref dchar result)
+    this(Source source)
     {
-        return decodeNext(source, result);
+        _source = source;
     }
+
+    static if (isInfinite!(Source))
+    {
+        enum bool empty = false;
+    }
+    else
+    {
+        @property bool empty()
+        {
+            return _source.empty && _front == NOTHING;
+        }
+    }
+
+    @property dchar front()
+    {
+        if (_front == NOTHING)
+            popFront;
+        return _front;
+    }
+
+    void popFront()
+    in
+    {
+        assert(!_source.empty || _front != NOTHING);
+    }
+    body
+    {
+        if (_source.empty)
+            _front = NOTHING;
+        else
+            _front = decodeNext(_source);
+    }
+
+private:
+    Source _source;
+    dchar  _front = NOTHING;
 }
 
 unittest
@@ -1574,11 +1620,11 @@ unittest
     foreach (String; TypeTuple!(string, wstring, dstring))
     {
         auto r = byCodePoint(NaiveInput!String(witness));
-        dchar c;
         size_t k = 0;
-        for (dchar* p; (p = r.getNext(c)) != null; ++k)
+        for (; !r.empty; r.popFront)
         {
-            assert(*p == witness[k]);
+            assert(r.front == witness[k]);
+            ++k;
         }
         assert(k == witness.length);
     }
@@ -1636,10 +1682,14 @@ struct UTFTextWriter(Char, Sink)
 
         for (size_t i = 0; i < str.length; )
         {
+            assert(ubuf.length >= 4);
             putUTF!char(ubuf, str.decode(i));
 
             if (ubuf.length < 4 || i == str.length)
+            {
                 sink.put(ustore[0 .. $ - ubuf.length]);
+                ubuf = ustore;
+            }
         }
     }
 
@@ -1650,10 +1700,14 @@ struct UTFTextWriter(Char, Sink)
 
         foreach (dchar c; str)
         {
+            assert(ubuf.length >= 4);
             putUTF!char(ubuf, c);
 
             if (ubuf.length < 4)
+            {
                 sink.put(ustore[0 .. $ - ubuf.length]);
+                ubuf = ustore;
+            }
         }
         if (ubuf.length < ustore.length)
             sink.put(ustore[0 .. $ - ubuf.length]);
@@ -1686,10 +1740,14 @@ struct UTFTextWriter(Char, Sink)
 
         for (size_t i = 0; i < str.length; )
         {
+            assert(wbuf.length >= 2);
             putUTF!wchar(wbuf, str.decode(i));
 
             if (wbuf.length < 2 || i == str.length)
+            {
                 sink.put(wstore[0 .. $ - wbuf.length]);
+                wbuf = wstore;
+            }
         }
     }
 
@@ -1705,10 +1763,14 @@ struct UTFTextWriter(Char, Sink)
 
         foreach (dchar c; str)
         {
+            assert(wbuf.length >= 2);
             putUTF!wchar(wbuf, c);
 
             if (wbuf.length < 2)
+            {
                 sink.put(wstore[0 .. $ - wbuf.length]);
+                wbuf = wstore;
+            }
         }
         if (wbuf.length < wstore.length)
             sink.put(wstore[0 .. $ - wbuf.length]);
@@ -1744,7 +1806,10 @@ struct UTFTextWriter(Char, Sink)
             buf[used++] = str.decode(i);
 
             if (used == buf.length || i == str.length)
+            {
                 sink.put(buf[0 .. used]);
+                used = 0;
+            }
         }
     }
 
@@ -1758,7 +1823,10 @@ struct UTFTextWriter(Char, Sink)
             buf[used++] = str.decode(i);
 
             if (used == buf.length || i == str.length)
+            {
                 sink.put(buf[0 .. used]);
+                used = 0;
+            }
         }
     }
 
@@ -1799,4 +1867,33 @@ unittest
         assert(w.sink.result == witness);
     }
 }
+
+unittest
+{
+    enum dstring seed =
+         "\u0000\u007F\u0080\u07FF\u0800\uD7FF\uE000\uFFFD"
+        ~"\U00010000\U0010FFFF"
+        ~"\U0001D800\U0001DBFF\U0001DC00\U0001DFFF\U0001FFFF";
+
+     string veryLong8  = seed~seed~seed~seed~seed~seed~seed~seed~seed;
+    wstring veryLong16 = seed~seed~seed~seed~seed~seed~seed~seed~seed;
+    dstring veryLong32 = seed~seed~seed~seed~seed~seed~seed~seed~seed;
+    veryLong8  ~= veryLong8 ; veryLong8  ~= veryLong8;
+    veryLong16 ~= veryLong16; veryLong16 ~= veryLong16;
+    veryLong32 ~= veryLong32; veryLong32 ~= veryLong32;
+
+    static struct NullSink(Char)
+    {
+        void put(in Char[] ) {}
+    }
+
+    foreach (Char; TypeTuple!(char, wchar, dchar))
+    {
+        auto w = writeTextIn!Char(NullSink!Char());
+        w.put(veryLong8 );
+        w.put(veryLong16);
+        w.put(veryLong32);
+    }
+}
+
 

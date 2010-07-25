@@ -206,12 +206,7 @@ template isInputRange(R)
         if (r.empty) {}  // can test for empty
         r.popFront;          // can invoke next
         auto h = r.front; // can get the front of the range
-    }()))
-    //--- [devel]
-    ||
-    is(typeof(R.getNext) == function)
-    //--- [/devel]
-    ;
+    }()));
 }
 
 unittest
@@ -437,10 +432,6 @@ template ElementType(R)
     //alias typeof({ R r; return front(r[]); }()) ElementType;
     static if (is(typeof(R.front()) T))
         alias T ElementType;
-    // ---[devel]
-    else static if (is(typeof(R.getNext) U == return) && is(U T == T*))
-        alias T ElementType;
-    // ---[/devel]
     else
         alias void ElementType;
 }
@@ -3090,40 +3081,5 @@ unittest
     }
     InputRange r;
     assert(moveFront(r) == 43);
-}
-
-
-//----------------------------------------------------------------------------//
-// [devel] temporary
-//----------------------------------------------------------------------------//
-
-import core.stdc.stdlib : alloca;
-
-@system
-E* getNext(E, R)(ref R input, ref E store = *(cast(E*) alloca(E.sizeof)))
-{
-    static if (is(typeof(input.getNext(store)) == E*)
-            /+ @@@ +/ && !isArray!(R))
-    {
-        return input.getNext(store);
-    }
-    else
-    {
-        if (input.empty)
-            return null;
-
-        static if (is(typeof(&(0, input.front)) == E*))
-        {
-            auto p = &(0, input.front);
-            input.popFront;
-            return p;
-        }
-        else
-        {
-            store = input.front;
-            input.popFront;
-            return &store;
-        }
-    }
 }
 

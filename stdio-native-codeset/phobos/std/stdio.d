@@ -2430,16 +2430,90 @@ private @system struct LockedFileHandle
 /*
 $(D LockingByteReader) locks a file stream and reads raw bytes from it.
  */
-@system struct LockingByteReader
+private @system struct LockingByteReader
 {
-    private LockedFileHandle _file;
+    private
+    {
+        LockedFileHandle _file;
+
+        // @@@ workaround: input range needs prefetching one byte
+        struct Context
+        {
+            int  front;
+            bool frontUsed;
+            bool needNext = true;
+            uint refCount = 1;
+        }
+        Context* _context;
+    }
 
     this(File file)
     {
         _file = LockedFileHandle(file);
-        enforce(fwide(cast(shared) _file.handle, 0) <= 0, "File can't be wide oriented");
+        enforce(fwide(cast(shared) _file.handle, 0) <= 0,
+                "File can't be wide oriented");
+        _context = new Context;
     }
 
+    @property bool empty()
+    {
+        if (_context.needNext)
+            popFrontLazy();
+        return _context.front == EOF;
+    }
+
+    @property ubyte front()
+    {
+        if (_context.needNext)
+            popFrontLazy();
+        _context.frontUsed = true;
+        return cast(ubyte) _context.front;
+    }
+
+    void popFront()
+    {
+        if (_context.needNext)
+            popFrontLazy();
+        _context.needNext = true;
+    }
+
+    // @@@ workaround: should prefetch a 'front' byte lazily
+    private void popFrontLazy()
+    {
+        while ((_context.front = FGETC(_file.handle)) == EOF)
+        {
+            if (feof(cast(shared) _file.handle))
+                break;
+
+            switch (errno)
+            {
+            case EINTR:
+                continue;
+
+            default:
+                throw new StdioException(null);
+            }
+        }
+        _context.needNext = false;
+        _context.frontUsed = false;
+    }
+
+    // @@@ workaround: have to return unused 'front' to the stream
+    this(this)
+    {
+        if (_context)
+            ++_context.refCount;
+    }
+    ~this()
+    {
+        if (_context && --_context.refCount == 0)
+        {
+            with (*_context)
+              if (!frontUsed && !needNext && front != EOF)
+                enforce(ungetc(front, cast(shared) _file.handle) != EOF);
+        }
+    }
+/+
     ubyte* getNext(ref ubyte store)
     {
         int c;
@@ -2463,6 +2537,7 @@ $(D LockingByteReader) locks a file stream and reads raw bytes from it.
         store = cast(ubyte) c;
         return &store;
     }
++/
 }
 
 unittest
@@ -2474,10 +2549,7 @@ unittest
     scope(exit) std.file.remove("deleteme");
 
     auto r = LockingByteReader(File("deleteme", "rb"));
-    size_t k = 0;
-    for (ubyte b; r.getNext(b); ++k)
-        assert(b == witness[k]);
-    assert(k == witness.length);
+    assert(equal(r, witness));
 }
 
 
@@ -2489,6 +2561,13 @@ sequences as dchars.
 {
     private NativeCharacterReader!LockingByteReader _reader;
 
+/*
+Constructs a $(D LockingNativeTextReader) on an open _file $(D file).
+
+Params:
+ file = An open $(D File) to read from.  The _file stream must not be
+    wide oriented.
+ */
     this(File file)
     {
         enforce(file.isOpen, "File must be open");
@@ -2496,9 +2575,22 @@ sequences as dchars.
         _reader = NativeCharacterReader!LockingByteReader(LockingByteReader(file));
     }
 
-    dchar* getNext(ref dchar store)
+/// Range primitive implementations.
+    @property bool empty()
     {
-        return _reader.getNext(store);
+        return _reader.empty;
+    }
+
+/// ditto
+    @property dchar front()
+    {
+        return _reader.front;
+    }
+
+/// ditto
+    void popFront()
+    {
+        _reader.popFront;
     }
 }
 
@@ -2525,18 +2617,11 @@ in the native codeset.
         LockedFileHandle _posses;
     }
 
-/**
+/*
 Constructs a $(D LockingNativeTextWriter) object.
 
 Params:
  file = An open $(D File) to write in.  The _file must not be wide oriented.
-
-Throws:
- $(UL
-   $(LI $(D enforcement) fails if $(D file) is not open)
-   $(LI $(D enforcement) fails if $(D file) is wide oriented)
-   $(LI $(D EncodingException) if convertion is not supported)
- )
  */
     this(File file)
     {
@@ -2562,13 +2647,13 @@ Throws:
                     UnsharedByteWriter(_posses.handle));
     }
 
-    /// Range primitive implementations.
+/// Range primitive implementations.
     void put(S)(S str) if (isSomeString!(S))
     {
         _writer.put(str);
     }
 
-    /// ditto
+/// ditto
     void put(C = dchar)(dchar c)
     {
         _writer.put(c);

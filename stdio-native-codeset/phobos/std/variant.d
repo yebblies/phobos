@@ -2048,18 +2048,22 @@ assert(*p == 1);
     private template _canDispatchByRef(string op, Args...)
     {
         enum bool _canDispatchByRef =
-            NoDuplicates!(_MapOpDispatchRTs!(op, Args)).length == 1
-            &&
-            __traits(compiles, function(Args args)
-                {
-                    enum dispatch = "obj."
-                        ~ (args.length ? op ~ "(args)" : op);
-                    foreach (Type; _Types)
-                    {
-                        Type obj;
-                        expectLvalue(mixin(dispatch));
-                    }
-                });
+            NoDuplicates!(_MapOpDispatchRTs!(op, Args)).length == 1 &&
+            _canDispatchByRef_examineRef!(op, 0, Args);
+    }
+
+    private template _canDispatchByRef_examineRef(string op, size_t i, Args...)
+    {
+        static if (i < _Types.length && is(_Types[i] Active))
+            enum bool _canDispatchByRef_examineRef =
+                __traits(compiles,
+                    expectLvalue(
+                        mixin("phony!Active."
+                                ~ (Args.length ? op ~ "(phonyList!Args)" : op)
+                            ))) &&
+                _canDispatchByRef_examineRef!(op, i + 1, Args);
+        else
+            enum bool _canDispatchByRef_examineRef = true;
     }
 
 
