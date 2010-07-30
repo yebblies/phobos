@@ -11,8 +11,8 @@
  *   Converts UTF string into the corresponding native string by chunk.
  *
  *
- * This module is _not_ intended for general codeset convertion.  Its purpose
- * is to provide means of convertion between Unicode and system native codeset
+ * This module is _not_ intended for general codeset conversion.  Its purpose
+ * is to provide means of conversion between Unicode and system native codeset
  * using system functions:
  *
  *   Windows ... WideCharToMultiByte and MultiByteToWideChar
@@ -28,13 +28,11 @@ module std.internal.stdio.nativechar;
 
 import std.algorithm;
 import std.array;
-import std.conv;
 import std.exception;
 import std.range  : isInputRange, isOutputRange, ElementType;
 import std.string : toStringz;
 import std.traits : isSomeString, isArray;
 import std.utf    : isValidDchar, stride, decode, putUTF;
-import std.variant;
 
 version (Windows)
 {
@@ -55,8 +53,6 @@ else version (Posix)
 
     import core.sys.posix.iconv;
     import core.sys.posix.langinfo;
-
-    debug = USE_LIBICONV;
 }
 
 
@@ -84,32 +80,23 @@ debug (USE_LIBICONV) extern(C) @system
     pragma(lib, "iconv");
 }
 
+/+
+// @@@ This does not work.
+static if (is(iconv_t)) version = HAVE_ICONV;
++/
+version (linux) version = HAVE_ICONV;
+version (OSX) version = HAVE_ICONV;
+version (Solaris) version = HAVE_ICONV;
+debug (USE_LIBICONV) version = HAVE_ICONV;
 
-private enum Transcoder
-{
-    none,
-    WinNLS, // UTF-16 <--> native w/ MultiByteToWideChar & WideCharToMultiByte
-    iconv,  // UTF-8  <--> native w/ iconv
-}
 
 version (Windows)
 {
-    enum backingTranscoder = Transcoder.WinNLS;
+    version = TranscoderWinNLS;
 }
 else version (Posix)
 {
-    enum backingTranscoder = is(iconv_t) ? Transcoder.iconv : Transcoder.none;
-
-    // @@@ workaround: static if (is(iconv_t)) doesn't work
-    version (  linux) version = HAVE_ICONV;
-    version (    OSX) version = HAVE_ICONV;
-    version (Solaris) version = HAVE_ICONV;
-    version ( NetBSD) version = HAVE_ICONV;
-    debug (USE_LIBICONV) version = HAVE_ICONV;
-}
-else
-{
-    enum backingTranscoder = Transcoder.none;
+    version (HAVE_ICONV) version = TranscoderIconv;
 }
 
 
@@ -151,7 +138,7 @@ else version (Posix)
         scope(exit) setlocale(LC_CTYPE, origCtype.ptr);
 
         if (auto codeset = nl_langinfo(CODESET))
-            .nativeCodeset = to!string(codeset);
+            .nativeCodeset = dupCstringz(codeset);
         else
             .nativeCodeset = "US-ASCII";
     }
@@ -167,18 +154,18 @@ else version (Posix)
 else
 {
     // Dunno how to detect the native codeset.
-    enum bool isNativeUTF8  = false;
+    enum bool isNativeUTF8 = false;
 }
 
 
 // Detect GNU iconv as its behavior slightly differs from the POSIX standard
-static if (.backingTranscoder == Transcoder.iconv)
+version (TranscoderIconv)
 {
     immutable bool isIconvGNU;      // true <= iconv by GNU
 
     shared static this()
     {
-        iconv_t cd = iconv_open("ASCII//IGNORE", "");
+        iconv_t cd = iconv_open("US-ASCII//IGNORE", "");
 
         if (cd != cast(iconv_t) -1)
         {
@@ -203,17 +190,17 @@ class EncodingException : Exception
 /*
  * Status code returned by converters.
  */
-enum ConvertionStatus
+enum ConversionStatus
 {
-    ok,         // convertion succeeded
+    ok,         // conversion succeeded
     empty,      // empty source
 }
 
 
 /*
- * Configuration for converters.
+ * Configuration for native codeset converters.
  */
-enum ConvertionMode
+enum ConversionMode
 {
     native,     // use environment native codeset
     console,    // use console native codeset
@@ -231,47 +218,54 @@ enum ConvertionMode
 {
     /*
      * Params:
-     *  mode = $(D ConvertionMode) for determining the target codeset.  This
+     *  mode = $(D ConversionMode) for determining the target codeset.  This
      *    parameter is used only on Windows to distinguish native code page and
      *    console code page; it's just ignored on other platforms.
      *
      * Throws:
-     *  $(D EncodingException) if convertion is not supported.
+     *  $(D EncodingException) if conversion is not supported.
      */
-    this(ConvertionMode mode)
+    this(ConversionMode mode)
     {
-        static if (.backingTranscoder == Transcoder.WinNLS)
+        version (TranscoderWinNLS)
         {
             DWORD codepage;
 
             final switch (mode)
             {
-              case ConvertionMode.native : codepage = .nativeCodepage; break;
-              case ConvertionMode.console: codepage =  GetConsoleCP(); break;
+              case ConversionMode.native : codepage = .nativeCodepage; break;
+              case ConversionMode.console: codepage =  GetConsoleCP(); break;
             }
             decoder_ = WindowsNativeCodesetDecoder(codepage);
+        }
+        else version (TranscoderIconv)
+        {
+            decoder_ = IconvNativeCodesetDecoder(.nativeCodeset);
         }
         else
         {
             if (.isNativeUTF8)
-            {
                 // We can use our own decoder implementation.
                 decoder_ = UTF8Decoder();
-                return;
-            }
-
-            static if (.backingTranscoder == Transcoder.iconv)
-                decoder_ = IconvNativeCodesetDecoder(.nativeCodeset);
             else
-                throw new EncodingException("Convertion between native codeset "
+                throw new EncodingException("conversion between native codeset "
                         ~"and Unicode is not supported", __FILE__, __LINE__);
         }
     }
 
 
-    /+@safe nothrow+/ void opAssign(typeof(this) rhs)
+    void opAssign(typeof(this) rhs)
     {
         swap(this, rhs);
+    }
+
+
+    /*
+     * Resets conversion state to the initial state.
+     */
+    void reset()
+    {
+        decoder_.reset();
     }
 
 
@@ -284,15 +278,15 @@ enum ConvertionMode
      *  sink   = output range that accepts dchars.
      *
      * Returns:
-     *  $(D ConvertionStatus.ok) if a character is converted to one or more
-     *  Unicode code points in $(D sink), or $(D ConvertionStatus.empty) is
+     *  $(D ConversionStatus.ok) if a character is converted to one or more
+     *  Unicode code points in $(D sink), or $(D ConversionStatus.empty) is
      *  returned if $(D source) is empty and nothing is done.
      *
      * Throws:
      *  - $(D EncodingException) if a beginning sequence in $(D source) does
      *    not form a valid native multibyte character.
      */
-    ConvertionStatus convertCharacter(Source, Sink)(ref Source source, ref Sink sink)
+    ConversionStatus convertCharacter(Source, Sink)(ref Source source, ref Sink sink)
             if (isOutputRange!(Sink, dchar))
     {
         return decoder_.convertCharacter(source, sink);
@@ -301,13 +295,13 @@ enum ConvertionMode
 
     //----------------------------------------------------------------//
 private:
-    static if (.backingTranscoder == Transcoder.WinNLS)
+    version (TranscoderWinNLS)
     {
         WindowsNativeCodesetDecoder decoder_;
     }
-    else static if (.backingTranscoder == Transcoder.iconv)
+    else version (TranscoderIconv)
     {
-        Algebraic!(UTF8Decoder, IconvNativeCodesetDecoder) decoder_;
+        IconvNativeCodesetDecoder decoder_;
     }
     else
     {
@@ -321,8 +315,8 @@ unittest
 
     try
     {
-        decoder = NativeCodesetDecoder(ConvertionMode.native);
-        decoder = NativeCodesetDecoder(ConvertionMode.console);
+        decoder = NativeCodesetDecoder(ConversionMode.native);
+        decoder = NativeCodesetDecoder(ConversionMode.console);
     }
     catch (EncodingException e)
     {
@@ -333,7 +327,9 @@ unittest
     ubyte[] src;
     dchar[] dst;
     auto stat = decoder.convertCharacter(src, dst);
-    assert(stat == ConvertionStatus.empty);
+    assert(stat == ConversionStatus.empty);
+
+    decoder.reset();
 }
 
 
@@ -345,24 +341,33 @@ private @system struct UTF8Decoder
 static: // stateless
 
     /*
+     * Resets conversion state to the initial state.
+     * Nothing is done because UTF-8 is a stateless CES.
+     */
+    void reset()
+    {
+    }
+
+
+    /*
      * Converts a UTF-8 encoded code point at the beginning of $(D source)
      * into the code point in $(D sink).
      *
      * Throws:
      *  - $(D EncodingException) on invalid or incomplete UTF-8 sequence.
      */
-    ConvertionStatus convertCharacter(Source, Sink)(ref Source source, ref Sink sink)
+    ConversionStatus convertCharacter(Source, Sink)(ref Source source, ref Sink sink)
             if (isOutputRange!(Sink, dchar))
     {
         ubyte u1;
 
         if (!readNext(source, u1))
-            return ConvertionStatus.empty;
+            return ConversionStatus.empty;
 
         if (u1 < 0x80)
         {
             sink.put(cast(dchar) u1);
-            return ConvertionStatus.ok;
+            return ConversionStatus.ok;
         }
 
         // Decode trailing byte sequence...
@@ -411,7 +416,7 @@ static: // stateless
             throw new EncodingException("invalid code point", __FILE__, __LINE__);
 
         sink.put(code);
-        return ConvertionStatus.ok;
+        return ConversionStatus.ok;
     }
 }
 
@@ -422,7 +427,9 @@ unittest
     dchar[] dst;
     auto decoder = UTF8Decoder();
     auto stat = decoder.convertCharacter(src, dst);
-    assert(stat == ConvertionStatus.empty);
+    assert(stat == ConversionStatus.empty);
+
+    decoder.reset();
 }
 
 unittest
@@ -440,10 +447,10 @@ unittest
 
     auto decoder = UTF8Decoder();
 
-    while (decoder.convertCharacter(src, dst) == ConvertionStatus.ok)
+    while (decoder.convertCharacter(src, dst) == ConversionStatus.ok)
         continue;
     auto stat = decoder.convertCharacter(src, dst);
-    assert(stat == ConvertionStatus.empty);
+    assert(stat == ConversionStatus.empty);
 
     assert(src.empty);
     assert(dst.length == 6);
@@ -486,7 +493,7 @@ unittest
         {
             dchar[] dst = new dchar[](4);
             decoder.convertCharacter(wrong, dst);
-            assert(0, "#" ~ to!string(i));
+            assert(0);
         }
         catch (EncodingException e)
         {
@@ -519,6 +526,15 @@ private @system struct WindowsNativeCodesetDecoder
 
 
     /*
+     * Resets conversion state to the initial state.
+     */
+    void reset()
+    {
+        // Only support stateless CES.
+    }
+
+
+    /*
      * Converts a native character sequence at the beginning of $(D source)
      * into the corresponding UTF-32 sequence in $(D sink).
      *
@@ -527,7 +543,7 @@ private @system struct WindowsNativeCodesetDecoder
      *  - $(D EncodingException) on incomplete multibyte sequence.
      *  - $(D Exception) on unexpected Windows API error.
      */
-    ConvertionStatus convertCharacter(Source, Sink)(ref Source source, ref Sink sink)
+    ConversionStatus convertCharacter(Source, Sink)(ref Source source, ref Sink sink)
             if (isOutputRange!(Sink, dchar))
     {
         // double-byte character sequence read from the source
@@ -537,7 +553,7 @@ private @system struct WindowsNativeCodesetDecoder
         if (readNext(source, mbcseq[0]))
             ++mbcseqRead;
         else
-            return ConvertionStatus.empty;
+            return ConversionStatus.empty;
 
         if (IsDBCSLeadByteEx(codepage_, mbcseq[0]))
         {
@@ -591,7 +607,7 @@ private @system struct WindowsNativeCodesetDecoder
         for (size_t i = 0; i < wchars.length; )
             sink.put(wchars.decode(i));
 
-        return ConvertionStatus.ok;
+        return ConversionStatus.ok;
     }
 
 
@@ -608,9 +624,11 @@ version (Windows) unittest
     dchar[] dst;
 
     auto stat = decoder.convertCharacter(src, dst);
-    assert(stat == ConvertionStatus.empty);
+    assert(stat == ConversionStatus.empty);
     assert(src.empty);
     assert(dst.empty);
+
+    decoder.reset();
 }
 
 version (Windows) unittest
@@ -636,12 +654,12 @@ version (Windows) unittest
         assert(dst.length == 2);
 
         auto stat1 = decoder.convertCharacter(src, dst);
-        assert(stat1 == ConvertionStatus.ok);
+        assert(stat1 == ConversionStatus.ok);
         assert(src.length == 0);
         assert(dst.length == 1);
 
         auto stat2 = decoder.convertCharacter(src, dst);
-        assert(stat2 == ConvertionStatus.empty);
+        assert(stat2 == ConversionStatus.empty);
         assert(src.length == 0);
         assert(dst.length == 1);
 
@@ -669,7 +687,7 @@ version (Windows) unittest
     {
         k += wid[i++];
         auto stat = decoder.convertCharacter(src, dst);
-        assert(stat == ConvertionStatus.ok);
+        assert(stat == ConversionStatus.ok);
         assert(src.length == 14 - k);
         assert(dst.length == 10 - i);
     }
@@ -677,7 +695,7 @@ version (Windows) unittest
     assert(dst.length == 2);
 
     auto stat = decoder.convertCharacter(src, dst);
-    assert(stat == ConvertionStatus.empty);
+    assert(stat == ConversionStatus.empty);
     assert(src.length == 0);
     assert(dst.length == 2);
 
@@ -705,7 +723,7 @@ version (Windows) unittest
     {
         k += wid[i++];
         auto stat = decoder.convertCharacter(src, dst);
-        assert(stat == ConvertionStatus.ok);
+        assert(stat == ConversionStatus.ok);
         assert(src.length == 12 - k);
         assert(dst.length == 10 - i);
     }
@@ -713,7 +731,7 @@ version (Windows) unittest
     assert(dst.length == 2);
 
     auto stat = decoder.convertCharacter(src, dst);
-    assert(stat == ConvertionStatus.empty);
+    assert(stat == ConversionStatus.empty);
     assert(src.length == 0);
     assert(dst.length == 2);
 
@@ -732,7 +750,7 @@ private @system struct IconvNativeCodesetDecoder
     this(string codeset)
     {
         // We specify UTF-8 for tocode because some iconv implementations
-        // (e.g. Solaris) do not support convertion between certain codesets
+        // (e.g. Solaris) do not support conversion between certain codesets
         // and UTF-32, whereas UTF-8 is supported.
 
         copyCount_ = new int;
@@ -754,6 +772,24 @@ private @system struct IconvNativeCodesetDecoder
 
 
     /*
+     * Resets conversion state to the initial state.
+     */
+    void reset()
+    {
+        if (copyCount_ is null)
+            return;
+
+        const(ubyte)* src     = null;
+        size_t        srcLeft = 0;
+        ubyte*        dst     = null;
+        size_t        dstLeft = 0;
+
+        if (iconv(decoder_, &src, &srcLeft, &dst, &dstLeft) == -1)
+            throw new ErrnoException("resetting iconv conversion state");
+    }
+
+
+    /*
      * Converts a native character sequence at the beginning of $(D source)
      * into the corresponding UTF-32 sequence in $(D sink).
      *
@@ -762,7 +798,7 @@ private @system struct IconvNativeCodesetDecoder
      *  - $(D EncodingException) on incomplete multibyte sequence.
      *  - $(D ErrnoException) on unexpected iconv error.
      */
-    ConvertionStatus convertCharacter(Source, Sink)(ref Source source, ref Sink sink)
+    ConversionStatus convertCharacter(Source, Sink)(ref Source source, ref Sink sink)
             if (isOutputRange!(Sink, dchar))
     {
         // multibyte character sequence read from the source
@@ -774,7 +810,7 @@ private @system struct IconvNativeCodesetDecoder
         if (readNext(source, mbcseq[0]))
             ++mbcseqRead;
         else
-            return ConvertionStatus.empty;
+            return ConversionStatus.empty;
 
         // UTF-8 sequence corresponding to the input
         char[16] ucharsStack = void;
@@ -841,14 +877,29 @@ private @system struct IconvNativeCodesetDecoder
         for (size_t i = 0; i < uchars.length; )
             sink.put(uchars.decode(i));
 
-        return ConvertionStatus.ok;
+        return ConversionStatus.ok;
     }
 
 
     //----------------------------------------------------------------//
 private:
-    iconv_t decoder_;       // native => UTF-32
+    iconv_t decoder_;       // native => UTF-8
     int*    copyCount_;     // for managing iconv_t resource
+}
+
+version (HAVE_ICONV) unittest
+{
+    auto decoder = IconvNativeCodesetDecoder("US-ASCII");
+
+    ubyte[] src;
+    dchar[] dst;
+
+    auto stat = decoder.convertCharacter(src, dst);
+    assert(stat == ConversionStatus.empty);
+    assert(src.empty);
+    assert(dst.empty);
+
+    decoder.reset();
 }
 
 version (HAVE_ICONV) unittest
@@ -864,22 +915,22 @@ version (HAVE_ICONV) unittest
     assert(dst.length == 4);
 
     auto stat1 = decoder.convertCharacter(src, dst);
-    assert(stat1 == ConvertionStatus.ok);
+    assert(stat1 == ConversionStatus.ok);
     assert(src.length == 4);
     assert(dst.length == 3);
 
     auto stat2 = decoder.convertCharacter(src, dst);
-    assert(stat2 == ConvertionStatus.ok);
+    assert(stat2 == ConversionStatus.ok);
     assert(src.length == 2);
     assert(dst.length == 2);
 
     auto stat3 = decoder.convertCharacter(src, dst);
-    assert(stat3 == ConvertionStatus.ok);
+    assert(stat3 == ConversionStatus.ok);
     assert(src.length == 0);
     assert(dst.length == 1);
 
     auto stat4 = decoder.convertCharacter(src, dst);
-    assert(stat4 == ConvertionStatus.empty);
+    assert(stat4 == ConversionStatus.empty);
     assert(src.length == 0);
     assert(dst.length == 1);
 
@@ -902,7 +953,7 @@ version (HAVE_ICONV) unittest
     foreach (i; 0 .. 8)
     {
         auto stat = decoder.convertCharacter(src, dst);
-        assert(stat == ConvertionStatus.ok);
+        assert(stat == ConversionStatus.ok);
         assert(src.length == 7 - i);
         assert(dst.length == 9 - i);
     }
@@ -910,7 +961,7 @@ version (HAVE_ICONV) unittest
     assert(dst.length == 2);
 
     auto stat = decoder.convertCharacter(src, dst);
-    assert(stat == ConvertionStatus.empty);
+    assert(stat == ConversionStatus.empty);
     assert(src.length == 0);
     assert(dst.length == 2);
 
@@ -931,53 +982,60 @@ version (HAVE_ICONV) unittest
 {
     /*
      * Params:
-     *  mode = $(D ConvertionMode) for determining the target codeset.  This
+     *  mode = $(D ConversionMode) for determining the target codeset.  This
      *    parameter is used only on Windows to distinguish native code page and
      *    console code page; it's just ignored on other platforms.
      *
      * Throws:
-     *  - $(D EncodingException) if convertion is not supported.
+     *  - $(D EncodingException) if conversion is not supported.
      */
-    this(ConvertionMode mode)
+    this(ConversionMode mode)
     {
-        static if (.backingTranscoder == Transcoder.WinNLS)
+        version (TranscoderWinNLS)
         {
             DWORD codepage;
 
             final switch (mode)
             {
-              case ConvertionMode.native : codepage =      .nativeCodepage; break;
-              case ConvertionMode.console: codepage = GetConsoleOutputCP(); break;
+              case ConversionMode.native : codepage =      .nativeCodepage; break;
+              case ConversionMode.console: codepage = GetConsoleOutputCP(); break;
             }
             encoder_ = chainConverters(
                     UTFTextConverter!wchar(),
                     WindowsNativeCodesetEncoder(codepage));
         }
+        else version (TranscoderIconv)
+        {
+            encoder_ = chainConverters(
+                    UTFTextConverter!char(),
+                    IconvNativeCodesetEncoder(.nativeCodeset));
+        }
         else
         {
             if (.isNativeUTF8)
-            {
                 // We can use our own encoder implementation.
                 encoder_ = chainConverters(
                         UTFTextConverter!char(),
                         CastingConverter!ubyte());
-                return;
-            }
-
-            static if (.backingTranscoder == Transcoder.iconv)
-                encoder_ = chainConverters(
-                        UTFTextConverter!char(),
-                        IconvNativeCodesetEncoder(.nativeCodeset));
             else
-                throw new EncodingException("Convertion between native codeset "
+                throw new EncodingException("conversion between native codeset "
                         ~"and Unicode is not supported", __FILE__, __LINE__);
         }
     }
 
 
-    /+@safe nothrow+/ void opAssign(typeof(this) rhs)
+    void opAssign(typeof(this) rhs)
     {
         swap(this, rhs);
+    }
+
+
+    /*
+     * Resets conversion state to the initial state.
+     */
+    void reset()
+    {
+        encoder_.reset();
     }
 
 
@@ -990,8 +1048,8 @@ version (HAVE_ICONV) unittest
      *  sink  = output range that accepts ubyte[]s.
      *
      * Returns:
-     *  $(D ConvertionStatus.ok) if at least one character is converterd and
-     *  written to $(D sink), or $(D ConvertionStatus.empty) is returned if
+     *  $(D ConversionStatus.ok) if at least one character is converterd and
+     *  written to $(D sink), or $(D ConversionStatus.empty) is returned if
      *  $(D chunk) is empty and nothing is done.
      *
      * Throws:
@@ -1002,7 +1060,7 @@ version (HAVE_ICONV) unittest
      *  codeset.  Such characters would be replaced with a default replacement
      *  character offered by the system, or just dropped.
      */
-    ConvertionStatus convertChunk(Chunk, Sink)(Chunk chunk, ref Sink sink)
+    ConversionStatus convertChunk(Chunk, Sink)(Chunk chunk, ref Sink sink)
             if (isSomeString!(Chunk) && isOutputRange!(Sink, ubyte[]))
     {
         return encoder_.convertChunk(chunk, sink);
@@ -1011,16 +1069,14 @@ version (HAVE_ICONV) unittest
 
     //----------------------------------------------------------------//
 private:
-    static if (.backingTranscoder == Transcoder.WinNLS)
+    version (TranscoderWinNLS)
     {
         ConverterChain!(UTFTextConverter!wchar, WindowsNativeCodesetEncoder)
                 encoder_;
     }
-    else static if (.backingTranscoder == Transcoder.iconv)
+    else version (TranscoderIconv)
     {
-        Algebraic!(
-            ConverterChain!(UTFTextConverter!char,    CastingConverter!ubyte),
-            ConverterChain!(UTFTextConverter!char, IconvNativeCodesetEncoder))
+        ConverterChain!(UTFTextConverter!char, IconvNativeCodesetEncoder)
                 encoder_;
     }
     else
@@ -1036,8 +1092,8 @@ unittest
 
     try
     {
-        encoder = NativeCodesetEncoder(ConvertionMode.native);
-        encoder = NativeCodesetEncoder(ConvertionMode.console);
+        encoder = NativeCodesetEncoder(ConversionMode.native);
+        encoder = NativeCodesetEncoder(ConversionMode.console);
     }
     catch (EncodingException e)
     {
@@ -1045,17 +1101,19 @@ unittest
         return;
     }
 
-    ConvertionStatus stat;
+    ConversionStatus stat;
     auto sink = NaiveCatenator!ubyte();
 
     stat = encoder.convertChunk(""c, sink);
-    assert(stat == ConvertionStatus.empty);
+    assert(stat == ConversionStatus.empty);
 
     stat = encoder.convertChunk(""w, sink);
-    assert(stat == ConvertionStatus.empty);
+    assert(stat == ConversionStatus.empty);
 
     stat = encoder.convertChunk(""d, sink);
-    assert(stat == ConvertionStatus.empty);
+    assert(stat == ConversionStatus.empty);
+
+    encoder.reset();
 }
 
 
@@ -1080,6 +1138,15 @@ private @system struct WindowsNativeCodesetEncoder
 
 
     /*
+     * Resets conversion state to the initial state.
+     */
+    void reset()
+    {
+        // Only support stateless CES.
+    }
+
+
+    /*
      * Converts entire UTF-16 text $(D chunk) into the corresponding native multibyte
      * character sequence in $(D sink).
      *
@@ -1092,11 +1159,11 @@ private @system struct WindowsNativeCodesetEncoder
      *    UTF-16 sequence.
      *  - $(D Exception) on unexpected Windows API failure.
      */
-    ConvertionStatus convertChunk(Sink)(in wchar[] chunk, ref Sink sink)
+    ConversionStatus convertChunk(Sink)(in wchar[] chunk, ref Sink sink)
             if (isOutputRange!(Sink, ubyte[]))
     {
         if (chunk.length == 0)
-            return ConvertionStatus.empty;
+            return ConversionStatus.empty;
 
         ubyte[128] mbstrStack = void;
         ubyte[]    mbstr      = mbstrStack;
@@ -1126,7 +1193,7 @@ private @system struct WindowsNativeCodesetEncoder
         enforce(mbstrLen > 0, sysErrorString(GetLastError()));
 
         sink.put(mbstr[0 .. mbstrLen]);
-        return ConvertionStatus.ok;
+        return ConversionStatus.ok;
     }
 
 
@@ -1142,7 +1209,9 @@ version (Windows) unittest
     wchar[] src;
     auto sink  = NaiveCatenator!ubyte();
     auto stat = encoder.convertChunk(src, sink);
-    assert(stat == ConvertionStatus.empty);
+    assert(stat == ConversionStatus.empty);
+
+    encoder.reset();
 }
 
 version (Windows) unittest
@@ -1158,19 +1227,19 @@ version (Windows) unittest
     auto sink     = NaiveCatenator!ubyte();
 
     auto stat1 = encoder.convertChunk(input[0 .. 13], sink);
-    assert(stat1 == ConvertionStatus.ok);
+    assert(stat1 == ConversionStatus.ok);
     assert(sink.data.length == 13);
 
     auto stat2 = encoder.convertChunk(input[13 .. 26], sink);
-    assert(stat2 == ConvertionStatus.ok);
+    assert(stat2 == ConversionStatus.ok);
     assert(sink.data.length == 26);
 
     auto stat3 = encoder.convertChunk(input[26 .. 27], sink);
-    assert(stat3 == ConvertionStatus.ok);
+    assert(stat3 == ConversionStatus.ok);
     assert(sink.data.length == 27);
 
     auto stat4 = encoder.convertChunk(input[27 .. 27], sink);
-    assert(stat4 == ConvertionStatus.empty);
+    assert(stat4 == ConversionStatus.empty);
     assert(sink.data.length == 27);
 
     assert(sink.data == witness);
@@ -1185,19 +1254,19 @@ version (Windows) unittest
     auto sink     = NaiveCatenator!ubyte();
 
     auto stat1 = encoder.convertChunk(input[0 .. 4], sink);
-    assert(stat1 == ConvertionStatus.ok);
+    assert(stat1 == ConversionStatus.ok);
     assert(sink.data.length == 7);
 
     auto stat2 = encoder.convertChunk(input[4 .. 6], sink);
-    assert(stat2 == ConvertionStatus.ok);
+    assert(stat2 == ConversionStatus.ok);
     assert(sink.data.length == 11);
 
     auto stat3 = encoder.convertChunk(input[6 .. 7], sink);
-    assert(stat3 == ConvertionStatus.ok);
+    assert(stat3 == ConversionStatus.ok);
     assert(sink.data.length == 12);
 
     auto stat4 = encoder.convertChunk(input[7 .. 7], sink);
-    assert(stat4 == ConvertionStatus.empty);
+    assert(stat4 == ConversionStatus.empty);
     assert(sink.data.length == 12);
 
     assert(sink.data == witness);
@@ -1216,7 +1285,7 @@ private @system struct IconvNativeCodesetEncoder
         if (.isIconvGNU) codeset ~= "//IGNORE";   // for POSIX compat.
 
         // We specify UTF-8 for from because some iconv implementations
-        // (e.g. Solaris) do not support convertion between certain codesets
+        // (e.g. Solaris) do not support conversion between certain codesets
         // and UTF-32, whereas UTF-8 is supported.
 
         copyCount_ = new int;
@@ -1224,7 +1293,7 @@ private @system struct IconvNativeCodesetEncoder
         errnoEnforce(encoder_ != cast(iconv_t) -1);
     }
 
-    @trusted this(this)
+    this(this)
     {
         if (copyCount_)
             ++*copyCount_;
@@ -1234,6 +1303,24 @@ private @system struct IconvNativeCodesetEncoder
     {
         if (copyCount_ && (*copyCount_)-- == 0)
             errnoEnforce(iconv_close(encoder_) != -1);
+    }
+
+
+    /*
+     * Resets conversion state to the initial state.
+     */
+    void reset()
+    {
+        if (copyCount_ is null)
+            return;
+
+        const(ubyte)* src     = null;
+        size_t        srcLeft = 0;
+        ubyte*        dst     = null;
+        size_t        dstLeft = 0;
+
+        if (iconv(encoder_, &src, &srcLeft, &dst, &dstLeft) == -1)
+            throw new ErrnoException("resetting iconv conversion state");
     }
 
 
@@ -1249,11 +1336,11 @@ private @system struct IconvNativeCodesetEncoder
      *  - $(D EncodingException) if $(D chunk) contains invalid UTF-8 sequence.
      *  - $(D ErrnoExceptino) on unexpected iconv failure.
      */
-    ConvertionStatus convertChunk(Sink)(in char[] chunk, ref Sink sink)
+    ConversionStatus convertChunk(Sink)(in char[] chunk, ref Sink sink)
             if (isOutputRange!(Sink, ubyte[]))
     {
         if (chunk.length == 0)
-            return ConvertionStatus.empty;
+            return ConversionStatus.empty;
 
         ubyte[128] mcharsStack = void;
         ubyte[]    mchars      = mcharsStack;
@@ -1300,13 +1387,13 @@ private @system struct IconvNativeCodesetEncoder
                 }
             }
         }
-        return ConvertionStatus.ok;
+        return ConversionStatus.ok;
     }
 
 
     //----------------------------------------------------------------//
 private:
-    iconv_t encoder_;       // UTF-32 => native
+    iconv_t encoder_;       // UTF-8 => native
     int*    copyCount_;     // for managing iconv_t resource
 }
 
@@ -1317,7 +1404,9 @@ version (HAVE_ICONV) unittest
     char[] src;
     auto sink = NaiveCatenator!ubyte();
     auto stat = encoder.convertChunk(src, sink);
-    assert(stat == ConvertionStatus.empty);
+    assert(stat == ConversionStatus.empty);
+
+    encoder.reset();
 }
 
 version (HAVE_ICONV) unittest
@@ -1331,7 +1420,7 @@ version (HAVE_ICONV) unittest
     assert(sink.data.empty);
 
     auto stat = encoder.convertChunk(src, sink);
-    assert(stat == ConvertionStatus.ok);
+    assert(stat == ConversionStatus.ok);
     assert(sink.data == wit);
 }
 
@@ -1346,7 +1435,7 @@ version (HAVE_ICONV) unittest
     assert(sink.data.empty);
 
     auto stat = encoder.convertChunk(src, sink);
-    assert(stat == ConvertionStatus.ok);
+    assert(stat == ConversionStatus.ok);
     assert(sink.data == wit);
 }
 
@@ -1364,20 +1453,22 @@ private struct UTFTextConverter(Unit : char)
 static:
     private enum size_t BUFFER_SIZE = 128;
 
-    ConvertionStatus convertChunk(Sink)(in char[] chunk, ref Sink sink)
+    void reset() {}
+
+    ConversionStatus convertChunk(Sink)(in char[] chunk, ref Sink sink)
             if (isOutputRange!(Sink, char[]))
     {
         if (chunk.empty)
-            return ConvertionStatus.empty;
+            return ConversionStatus.empty;
         else
-            return sink.put(chunk), ConvertionStatus.ok;
+            return sink.put(chunk), ConversionStatus.ok;
     }
 
-    ConvertionStatus convertChunk(Sink)(in wchar[] chunk, ref Sink sink)
+    ConversionStatus convertChunk(Sink)(in wchar[] chunk, ref Sink sink)
             if (isOutputRange!(Sink, char[]))
     {
         if (chunk.empty)
-            return ConvertionStatus.empty;
+            return ConversionStatus.empty;
         //
         char[BUFFER_SIZE] ustore = void;
         char[]            ubuf   = ustore;
@@ -1393,14 +1484,14 @@ static:
                 ubuf = ustore;
             }
         }
-        return ConvertionStatus.ok;
+        return ConversionStatus.ok;
     }
 
-    ConvertionStatus convertChunk(Sink)(in dchar[] chunk, ref Sink sink)
+    ConversionStatus convertChunk(Sink)(in dchar[] chunk, ref Sink sink)
             if (isOutputRange!(Sink, char[]))
     {
         if (chunk.empty)
-            return ConvertionStatus.empty;
+            return ConversionStatus.empty;
         //
         char[BUFFER_SIZE] ustore = void;
         char[]            ubuf   = ustore;
@@ -1416,7 +1507,7 @@ static:
                 ubuf = ustore;
             }
         }
-        return ConvertionStatus.ok;
+        return ConversionStatus.ok;
     }
 }
 
@@ -1426,16 +1517,18 @@ unittest
     auto sink = NaiveCatenator!char();
 
     auto stat1 = conv.convertChunk(""c, sink);
-    assert(stat1 == ConvertionStatus.empty);
+    assert(stat1 == ConversionStatus.empty);
     assert(sink.data.empty);
 
     auto stat2 = conv.convertChunk(""w, sink);
-    assert(stat2 == ConvertionStatus.empty);
+    assert(stat2 == ConversionStatus.empty);
     assert(sink.data.empty);
 
     auto stat3 = conv.convertChunk(""d, sink);
-    assert(stat3 == ConvertionStatus.empty);
+    assert(stat3 == ConversionStatus.empty);
     assert(sink.data.empty);
+
+    conv.reset();
 }
 
 unittest
@@ -1444,15 +1537,15 @@ unittest
     auto sink = NaiveCatenator!char();
 
     auto stat1 = conv.convertChunk("\u0000\u007f\u0080\u07ff"c, sink);
-    assert(stat1 == ConvertionStatus.ok);
+    assert(stat1 == ConversionStatus.ok);
     assert(!sink.data.empty);
 
     auto stat2 = conv.convertChunk("\u0800\ud7ff\ue000\ufffd"w, sink);
-    assert(stat2 == ConvertionStatus.ok);
+    assert(stat2 == ConversionStatus.ok);
     assert(!sink.data.empty);
 
     auto stat3 = conv.convertChunk("\U00010000\U0001dc00\U0010ffff"d, sink);
-    assert(stat3 == ConvertionStatus.ok);
+    assert(stat3 == ConversionStatus.ok);
     assert(!sink.data.empty);
 
     assert(sink.data ==
@@ -1470,11 +1563,13 @@ private struct UTFTextConverter(Unit : wchar)
 static:
     private enum size_t BUFFER_SIZE = 80;
 
-    ConvertionStatus convertChunk(Sink)(in char[] chunk, ref Sink sink)
+    void reset() {}
+
+    ConversionStatus convertChunk(Sink)(in char[] chunk, ref Sink sink)
             if (isOutputRange!(Sink, wchar[]))
     {
         if (chunk.empty)
-            return ConvertionStatus.empty;
+            return ConversionStatus.empty;
         //
         wchar[BUFFER_SIZE] wstore = void;
         wchar[]            wbuf   = wstore;
@@ -1490,23 +1585,23 @@ static:
                 wbuf = wstore;
             }
         }
-        return ConvertionStatus.ok;
+        return ConversionStatus.ok;
     }
 
-    ConvertionStatus convertChunk(Sink)(in wchar[] chunk, ref Sink sink)
+    ConversionStatus convertChunk(Sink)(in wchar[] chunk, ref Sink sink)
             if (isOutputRange!(Sink, wchar[]))
     {
         if (chunk.empty)
-            return ConvertionStatus.empty;
+            return ConversionStatus.empty;
         else
-            return sink.put(chunk), ConvertionStatus.ok;
+            return sink.put(chunk), ConversionStatus.ok;
     }
 
-    ConvertionStatus convertChunk(Sink)(in dchar[] chunk, ref Sink sink)
+    ConversionStatus convertChunk(Sink)(in dchar[] chunk, ref Sink sink)
             if (isOutputRange!(Sink, wchar[]))
     {
         if (chunk.empty)
-            return ConvertionStatus.empty;
+            return ConversionStatus.empty;
         //
         wchar[BUFFER_SIZE] wstore = void;
         wchar[]            wbuf   = wstore;
@@ -1522,7 +1617,7 @@ static:
                 wbuf = wstore;
             }
         }
-        return ConvertionStatus.ok;
+        return ConversionStatus.ok;
     }
 }
 
@@ -1532,16 +1627,18 @@ unittest
     auto sink = NaiveCatenator!wchar();
 
     auto stat1 = conv.convertChunk(""c, sink);
-    assert(stat1 == ConvertionStatus.empty);
+    assert(stat1 == ConversionStatus.empty);
     assert(sink.data.empty);
 
     auto stat2 = conv.convertChunk(""w, sink);
-    assert(stat2 == ConvertionStatus.empty);
+    assert(stat2 == ConversionStatus.empty);
     assert(sink.data.empty);
 
     auto stat3 = conv.convertChunk(""d, sink);
-    assert(stat3 == ConvertionStatus.empty);
+    assert(stat3 == ConversionStatus.empty);
     assert(sink.data.empty);
+
+    conv.reset();
 }
 
 unittest
@@ -1550,15 +1647,15 @@ unittest
     auto sink = NaiveCatenator!wchar();
 
     auto stat1 = conv.convertChunk("\u0000\u007f\u0080\u07ff"c, sink);
-    assert(stat1 == ConvertionStatus.ok);
+    assert(stat1 == ConversionStatus.ok);
     assert(!sink.data.empty);
 
     auto stat2 = conv.convertChunk("\u0800\ud7ff\ue000\ufffd"w, sink);
-    assert(stat2 == ConvertionStatus.ok);
+    assert(stat2 == ConversionStatus.ok);
     assert(!sink.data.empty);
 
     auto stat3 = conv.convertChunk("\U00010000\U0001dc00\U0010ffff"d, sink);
-    assert(stat3 == ConvertionStatus.ok);
+    assert(stat3 == ConversionStatus.ok);
     assert(!sink.data.empty);
 
     assert(sink.data ==
@@ -1568,8 +1665,6 @@ unittest
 
 
 //----------------------------------------------------------------------------//
-// 
-//----------------------------------------------------------------------------//
 
 /*
  * Internally used for casting element type of chunks.
@@ -1577,13 +1672,15 @@ unittest
 private @system struct CastingConverter(ToE)
 {
 static:
-    ConvertionStatus convertChunk(Chunk, Sink)(Chunk chunk, ref Sink sink)
+    void reset() {}
+
+    ConversionStatus convertChunk(Chunk, Sink)(Chunk chunk, ref Sink sink)
             if (isOutputRange!(Sink, const ToE[]))
     {
         if (chunk.empty)
-            return ConvertionStatus.empty;
+            return ConversionStatus.empty;
         else
-            return sink.put(cast(const ToE[]) chunk), ConvertionStatus.ok;
+            return sink.put(cast(const ToE[]) chunk), ConversionStatus.ok;
     }
 }
 
@@ -1591,7 +1688,12 @@ unittest
 {
     auto toubyte = CastingConverter!ubyte();
     auto sink = NaiveCatenator!ubyte();
-    toubyte.convertChunk(""c, sink);
+
+    auto stat = toubyte.convertChunk(""c, sink);
+    assert(stat == ConversionStatus.empty);
+    assert(sink.data.empty);
+
+    toubyte.reset();
 }
 
 unittest
@@ -1600,10 +1702,10 @@ unittest
     auto sink = NaiveCatenator!ubyte();
 
     auto stat1 = toubyte.convertChunk(""c, sink);
-    assert(stat1 == ConvertionStatus.empty);
+    assert(stat1 == ConversionStatus.empty);
 
     auto stat2 = toubyte.convertChunk("\x00\x20"c, sink);
-    assert(stat2 == ConvertionStatus.ok);
+    assert(stat2 == ConversionStatus.ok);
 
     assert(sink.data == [ 0x00, 0x20 ]);
 }
@@ -1630,11 +1732,18 @@ private @system struct ConverterChain(Conv1, Conv2)
     }
 
 
+    void reset()
+    {
+        conv1_.reset();
+        conv2_.reset();
+    }
+
+
     /*
      * Converts $(D chunk) into a temporary using $(D Conv1), then converts the
      * temporary into $(D sink) using $(D Conv2).
      */
-    ConvertionStatus convertChunk(Chunk, Sink)(Chunk chunk, ref Sink sink)
+    ConversionStatus convertChunk(Chunk, Sink)(Chunk chunk, ref Sink sink)
     {
       /+
         struct ProxyOutput
@@ -1679,6 +1788,8 @@ unittest
     wuconv.convertChunk(""c, sink);
     wuconv.convertChunk(""w, sink);
     wuconv.convertChunk(""d, sink);
+
+    wuconv.reset();
 }
 
 unittest
@@ -1690,15 +1801,15 @@ unittest
     auto sink = NaiveCatenator!char();
 
     auto stat1 = wuconv.convertChunk(""c, sink);
-    assert(stat1 == ConvertionStatus.empty);
+    assert(stat1 == ConversionStatus.empty);
     assert(sink.data.empty);
 
     auto stat2 = wuconv.convertChunk(""w, sink);
-    assert(stat2 == ConvertionStatus.empty);
+    assert(stat2 == ConversionStatus.empty);
     assert(sink.data.empty);
 
     auto stat3 = wuconv.convertChunk(""d, sink);
-    assert(stat3 == ConvertionStatus.empty);
+    assert(stat3 == ConversionStatus.empty);
     assert(sink.data.empty);
 }
 
@@ -1711,190 +1822,20 @@ unittest
     auto sink = NaiveCatenator! char();
 
     auto stat1 = wuconv.convertChunk("\u0000\u007f\u0080\u07ff"c, sink);
-    assert(stat1 == ConvertionStatus.ok);
+    assert(stat1 == ConversionStatus.ok);
     assert(!sink.data.empty);
 
     auto stat2 = wuconv.convertChunk("\u0800\ud7ff\ue000\ufffd"w, sink);
-    assert(stat2 == ConvertionStatus.ok);
+    assert(stat2 == ConversionStatus.ok);
     assert(!sink.data.empty);
 
     auto stat3 = wuconv.convertChunk("\U00010000\U0001dc00\U0010ffff"d, sink);
-    assert(stat3 == ConvertionStatus.ok);
+    assert(stat3 == ConversionStatus.ok);
     assert(!sink.data.empty);
 
     assert(sink.data ==
              "\u0000\u007f\u0080\u07ff\u0800\ud7ff\ue000\ufffd"
             ~"\U00010000\U0001dc00\U0010ffff"c);
-}
-
-
-//----------------------------------------------------------------------------//
-// Range Adaptors for Converters
-//----------------------------------------------------------------------------//
-
-/*
- * $(D Input range) for reading $(D dchar)s from a multibyte input range
- * $(D Source) using a character-decoding converter $(D Decoder).
- */
-@system struct DecodedTextReader(Source, Decoder)
-        //if (isInputRange!(Source) && is(ElementType!Source : ubyte))
-{
-    this(Source source, Decoder decoder)
-    {
-        swap(source_, source);
-        swap(decoder_, decoder);
-        context_ = new Context;
-    }
-
-    void opAssign(typeof(this) rhs)
-    {
-        swap(this, rhs);
-    }
-
-
-    //----------------------------------------------------------------//
-    // range primitive implementations
-    //----------------------------------------------------------------//
-
-    @property bool empty()
-    {
-        if (context_.front == -1)
-            popFront;
-        return context_.front == -1 && context_.queue.empty && source_.empty;
-    }
-
-    @property dchar front()
-    {
-        if (context_.front == -1)
-            popFront;
-        return cast(dchar) context_.front;
-    }
-
-    void popFront()
-    {
-        if (!context_.queue.empty)
-        {
-            readNext(context_.queue, context_.front) || assert(0);
-        }
-        else
-        {
-            context_.front = -1;
-            cast(void) decoder_.convertCharacter(source_, this);
-        }
-    }
-
-    // Read $(D c) virtually into the internal buffer.
-    @safe void put(dchar c)
-    {
-        if (context_.front == -1)
-            context_.front  = c;
-        else
-            context_.queue ~= c;
-    }
-
-
-    //----------------------------------------------------------------//
-private:
-    struct Context
-    {
-        int     front = -1;
-        dstring queue;
-    }
-    Source   source_;
-    Decoder  decoder_;
-    Context* context_;
-}
-
-unittest
-{
-    alias DecodedTextReader!(ubyte[], UTF8Decoder) DTR;
-    ubyte[] source;
-    UTF8Decoder decoder;
-
-    auto r1 = DTR(source, decoder);
-    auto r2 = r1;
-    r1 = r2;
-}
-
-unittest
-{
-    enum dstring codepoints =
-        "\u0000\u007f\u0080\u07ff\u0800\ud7ff\ue000\ufffd\U00010000\U0010ffff";
-
-    auto s = cast(ubyte[]) (cast(string) codepoints).dup;
-    auto r = DecodedTextReader!(ubyte[], UTF8Decoder)(s, UTF8Decoder());
-
-    size_t k = 0;
-    for (; !r.empty; r.popFront, ++k)
-    {
-        assert(r.front == codepoints[k]);
-    }
-    assert(k == codepoints.length);
-}
-
-
-/*
- * $(D Output range) for writing sequence of data chunks into an output range
- * $(D Sink) with convertion by $(D Converter).
- */
-@system struct ConvertedChunkWriter(Sink, Converter)
-{
-    this(Sink sink, Converter converter)
-    {
-        swap(sink_, sink);
-        swap(converter_, converter);
-    }
-
-    void opAssign(typeof(this) rhs)
-    {
-        swap(this, rhs);
-    }
-
-    //----------------------------------------------------------------//
-    // output range primitive
-    //----------------------------------------------------------------//
-
-    void put(Chunk)(Chunk chunk)
-    {
-        cast(void) converter_.convertChunk(chunk, sink_);
-    }
-
-
-    //----------------------------------------------------------------//
-private:
-    Sink      sink_;
-    Converter converter_;
-}
-
-unittest
-{
-    alias ConvertedChunkWriter!(NaiveCatenator!char, UTFTextConverter!char) CCW;
-    NaiveCatenator!char sink;
-    UTFTextConverter!char encoder;
-
-    auto w1 = CCW(sink, encoder);
-    auto w2 = w1;
-    w1 = w2;
-}
-
-unittest
-{
-    enum dstring codepoints =
-        "\u0000\u007f\u0080\u07ff\u0800\ud7ff\ue000\ufffd\U00010000\U0010ffff";
-
-    auto sink = NaiveCatenator!char();
-    auto conv = UTFTextConverter!char();
-
-    alias .ConvertedChunkWriter!(typeof(sink)*, typeof(conv)) ConvertedChunkWriter;
-    auto wr = ConvertedChunkWriter(&sink, conv);
-
-    string s, w, d;
-    wr.put(s = codepoints);
-    wr.put(w = codepoints);
-    wr.put(d = codepoints);
-
-    string v = codepoints ~ codepoints ~ codepoints;
-    assert(sink.data == v);
 }
 
 
