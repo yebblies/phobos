@@ -32,7 +32,7 @@ import std.exception;
 import std.range  : isInputRange, isOutputRange, ElementType;
 import std.string : toStringz;
 import std.traits : isSomeString, isArray;
-import std.utf    : isValidDchar, stride, decode, putUTF;
+import std.utf    : isValidDchar, stride, decode, decodeFront, putUTF;
 
 version (Windows)
 {
@@ -58,18 +58,19 @@ else version (Posix)
 
 version (unittest) private
 {
-    // For testing converter outputs.
+    // Simple 'appender' for testing converter outputs.
     struct NaiveCatenator(E)
     {
         E[] data;
         void put(in E[] str) { data ~= str; }
+        void put(E e) { data ~= e; }
     }
 }
 
 
 //----------------------------------------------------------------------------//
 
-debug (USE_LIBICONV) extern(C) @system
+debug (USE_LIBICONV) private extern(C) @system
 {
     alias void* iconv_t;
 
@@ -81,7 +82,7 @@ debug (USE_LIBICONV) extern(C) @system
 }
 
 /+
-// @@@ This does not work.
+// @@@ This doesn't work.
 static if (is(iconv_t)) version = HAVE_ICONV;
 +/
 version (linux) version = HAVE_ICONV;
@@ -127,15 +128,16 @@ else version (Posix)
 
     shared static this()
     {
-        immutable(char)[] origCtype;
+        immutable(char)[] origCtypez;
 
         if (auto ctype = setlocale(LC_CTYPE, null))
-            origCtype = dupCstringz(ctype);
+            origCtypez = dupCstringz(ctype);
         else
-            origCtype = "C\0";
+            origCtypez = "C\0";
 
+        // Temporarily set to the default locale to obtain the native codeset.
         setlocale(LC_CTYPE, "");
-        scope(exit) setlocale(LC_CTYPE, origCtype.ptr);
+        scope(exit) setlocale(LC_CTYPE, origCtypez.ptr);
 
         if (auto codeset = nl_langinfo(CODESET))
             .nativeCodeset = dupCstringz(codeset);
@@ -354,68 +356,25 @@ static: // stateless
      * into the code point in $(D sink).
      *
      * Throws:
-     *  - $(D EncodingException) on invalid or incomplete UTF-8 sequence.
+     *  - $(D UtfException) on invalid or incomplete UTF-8 sequence.
      */
     ConversionStatus convertCharacter(Source, Sink)(ref Source source, ref Sink sink)
             if (isOutputRange!(Sink, dchar))
     {
-        ubyte u1;
-
-        if (!readNext(source, u1))
+        if (source.empty)
             return ConversionStatus.empty;
 
-        if (u1 < 0x80)
+        // Make Source's element type char.
+        static struct ReType
         {
-            sink.put(cast(dchar) u1);
-            return ConversionStatus.ok;
+            Source* source;
+            @property bool empty() { return (*source).empty; }
+            @property char front() { return (*source).front; }
+            void popFront() { (*source).popFront(); }
         }
 
-        // Decode trailing byte sequence...
-        dchar  code;
-        dchar  boundary;
-        size_t stride;
-
-        final switch (u1 >> 4)
-        {
-          case 0b1100, 0b1101:
-            code     = u1 & 0b0001_1111;
-            stride   = 2;
-            boundary = '\u0080';
-            break;
-
-          case 0b1110:
-            code     = u1 & 0b0000_1111;
-            stride   = 3;
-            boundary = '\u0800';
-            break;
-
-          case 0b1111:
-            if (u1 & 0b0000_1000)
-                throw new EncodingException("invalid UTF-8 leading byte", __FILE__, __LINE__);
-            code     = u1 & 0b0000_0111;
-            stride   = 4;
-            boundary = '\U00010000';
-            break;
-
-          case 0b1000, 0b1001, 0b1010, 0b1011:
-            throw new EncodingException("sudden UTF-8 trailing byte", __FILE__, __LINE__);
-        }
-        assert(stride >= 2);
-
-        foreach (i; 1 .. stride)
-        {
-            ubyte u;
-
-            if (!readNext(source, u) || (u & 0b11000000) != 0b10000000)
-                throw new EncodingException("error in UTF-8 trailing sequence", __FILE__, __LINE__);
-            code = (code << 6) | (u & 0b00111111);
-        }
-
-        // Check for invalid code point and overlong sequence.
-        if (!isValidDchar(code) || code < boundary)
-            throw new EncodingException("invalid code point", __FILE__, __LINE__);
-
-        sink.put(code);
+        immutable dchar c = decodeFront(ReType(&source));
+        sink.put(c);
         return ConversionStatus.ok;
     }
 }
@@ -441,7 +400,8 @@ unittest
         ~"\U000F0000\U000FD800\U000FDBFF\U000FDC00\U000FDFFF\U000FFFFF"
         ~"\U00100000\U0010D800\U0010DBFF\U0010DC00\U0010DFFF\U0010FFFF";
     dstring witness = codepoints;
-    string  src     = codepoints;
+    string  str     = codepoints;
+    ubyte[] src     = cast(ubyte[]) str.dup;
     dchar[] store   = new dchar[](32);
     dchar[] dst     = store;
 
@@ -486,16 +446,17 @@ unittest
         "\xF0\x80\x80\x80",
         "\xF0\x8F\xBF\xBF"
     ];
-    foreach (i, wrong; wrongList)
+    foreach (string wrong; wrongList)
     {
         auto decoder = UTF8Decoder();
         try
         {
+            ubyte[] src = cast(ubyte[]) wrong.dup;
             dchar[] dst = new dchar[](4);
-            decoder.convertCharacter(wrong, dst);
+            decoder.convertCharacter(src, dst);
             assert(0);
         }
-        catch (EncodingException e)
+        catch (Exception e)
         {
         }
     }
@@ -604,8 +565,8 @@ private @system struct WindowsNativeCodesetDecoder
         assert(wchars.length > 0);
 
         // Write the corresponding UTF-32 sequence to the sink.
-        for (size_t i = 0; i < wchars.length; )
-            sink.put(wchars.decode(i));
+        foreach (dchar c; wchars)
+            sink.put(c);
 
         return ConversionStatus.ok;
     }
@@ -874,8 +835,8 @@ private @system struct IconvNativeCodesetDecoder
         uchars = uchars[0 .. ucharsUsed];
 
         // Write the resulting UTF-32 sequence to the sink.
-        for (size_t i = 0; i < uchars.length; )
-            sink.put(uchars.decode(i));
+        foreach (dchar c; uchars)
+            sink.put(c);
 
         return ConversionStatus.ok;
     }
@@ -1846,7 +1807,7 @@ unittest
  * a value of type $(D E).  Returns $(D false) if $(D r) is empty.
  */
 private bool readNext(R, E)(ref R r, ref E item)
-        if (!isArray!(R) && isInputRange!(R) && is(ElementType!R : E))
+        if (isInputRange!(R) && is(ElementType!R : E))
 {
     if (r.empty)
     {
@@ -1855,7 +1816,7 @@ private bool readNext(R, E)(ref R r, ref E item)
     else
     {
         item = r.front;
-        r.popFront;
+        r.popFront();
         return true;
     }
 }
@@ -1888,39 +1849,5 @@ unittest
     assert(n == 1);
     assert(r.empty);
     readNext(r, b) && assert(0);
-}
-
-// For bypassing this: typeof(string.front) == dchar
-private bool readNext(A, E)(ref A arr, ref E item)
-        if (isArray!(A) && is(typeof(arr[0]) : E))
-{
-    if (arr.length == 0)
-    {
-        return false;
-    }
-    else
-    {
-        item = arr[0];
-        arr = arr[1 .. $];
-        return true;
-    }
-}
-
-unittest
-{
-    int[] r = [ 1, 2, 3 ];
-    int   e;
-
-    r.readNext(e) || assert(0);
-    assert(e == 1);
-
-    r.readNext(e) || assert(0);
-    assert(e == 2);
-
-    r.readNext(e) || assert(0);
-    assert(e == 3);
-
-    assert(r.empty);
-    r.readNext(e) && assert(0);
 }
 

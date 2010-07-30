@@ -28,11 +28,14 @@
  */
 module std.utf;
 
-import std.conv, std.exception, std.range, std.traits, std.typecons;
+import std.conv, std.exception, std.range, std.traits;
+
+version (unittest) import std.typetuple;
 
 //debug=utf;        // uncomment to turn on debugging printf's
 
 debug (utf) import core.stdc.stdio : printf;
+
 
 deprecated class UtfError : Error
 {
@@ -524,6 +527,456 @@ dchar decode(in dchar[] s, ref size_t idx)
     throw new UtfException("5invalid UTF-32 value", c);
 }
 
+
+/* =================== Decode from Range ======================= */
+
+// For testing decodeFront and decodeBack
+version (unittest) private @safe struct _BidiCodeUnits(S : C[], C)
+{
+    S store;
+    @property _BidiCodeUnits save() { return this; }
+    @property bool empty() { return store.length == 0; }
+    @property C front() { return store[0    ]; }
+    @property C  back() { return store[$ - 1]; }
+    void popFront() { store = store[1 .. $    ]; }
+    void popBack () { store = store[0 .. $ - 1]; }
+
+    static assert(isBidirectionalRange!(_BidiCodeUnits));
+    static assert(is(ElementType!(_BidiCodeUnits) == C));
+}
+
+/**
+ * Decodes one $(D dchar) from input range $(D r). Returns the decoded
+ * character and the shortened range.
+ */
+dchar decodeFront(Range)(ref Range r)
+    if (is(Unqual!(ElementType!Range) == char))
+in
+{
+    assert(!r.empty);
+}
+out (result)
+{
+    assert(isValidDchar(result));
+}
+body
+{
+    immutable u1 = r.front;
+    r.popFront();
+
+    if (u1 < 0x80)
+    {
+        // simplest case: ASCII character
+        return u1;
+    }
+    assert(u1 & 0b1000_0000);
+
+    //
+    uint  stride;
+    dchar minCode;  // for detecting overlong sequence
+
+    switch (u1 & 0b1111_0000)
+    {
+    case 0b1100_0000, 0b1101_0000:
+        stride  = 2;
+        minCode = '\u0080';
+        break;
+
+    case 0b1110_0000:
+        stride  = 3;
+        minCode = '\u0800';
+        break;
+
+    case 0b1111_0000:
+        if (u1 & 0b0000_1000)
+            goto default;
+        stride  = 4;
+        minCode = '\U00010000';
+        break;
+
+    default:
+        throw new UtfException("UTF-8 leading byte", u1);
+    }
+    assert(stride  >= 2);
+    assert(minCode >= '\u0080');
+
+    // Pick off (7 - n) significant bits from the first byte
+    dchar code = u1 & ((1 << (7 - stride)) - 1);
+
+    for (auto rest = stride; --rest > 0; )
+    {
+        if (r.empty)
+            throw new UtfException("insufficient input", u1);
+
+        immutable char u = r.front;
+        r.popFront();
+
+        // trailing bytes are 10xxxxxx
+        if ((u & 0b1100_0000) != 0b1000_0000)
+            throw new UtfException("invalid UTF-8 trailing byte", u);
+
+        code = (code << 6) | (u & 0b0011_1111);
+    }
+
+    if (!isValidDchar(code) || code < minCode)
+        throw new UtfException("illegal code point", code);
+
+    return code;
+}
+
+/// ditto
+dchar decodeFront(Range)(ref Range r)
+    if (is(Unqual!(ElementType!Range) == wchar))
+in
+{
+    assert(!r.empty);
+}
+out (result)
+{
+    assert(isValidDchar(result));
+}
+body
+{
+    dchar code;
+
+    code = r.front;
+    r.popFront();
+
+    // surrogate code unit
+    if ((code & 0xF800) == 0xD800)
+    {
+        assert(0xD800 <= code && code <= 0xDFFF);
+
+        if (code >= 0xDC00)
+            throw new UtfException(
+                "sudden low surrogate appearance", code);
+        assert(0xD800 <= code && code <= 0xDBFF);
+
+        if (r.empty)
+            throw new UtfException(
+                "surrogate pair past the end of " ~ Range.stringof, code);
+
+        // read the pairing low surrogate
+        immutable wchar pair = r.front;
+        r.popFront();
+
+        if ((pair & 0xFC00) != 0xDC00)
+            throw new UtfException("expected a low surrogate", pair);
+        assert(0xDC00 <= pair && pair <= 0xDFFF);
+
+        // compose the represented code point
+        code = ((code - 0xD7C0) << 10) + (pair - 0xDC00);
+    }
+    assert(isValidDchar(code)); // by UTF-16 definition
+
+    return code;
+}
+
+/// ditto
+dchar decodeFront(Range)(ref Range r)
+    if (is(Unqual!(ElementType!Range) == dchar))
+in
+{
+    assert(!r.empty);
+}
+out (result)
+{
+    assert(isValidDchar(result));
+}
+body
+{
+    immutable code = r.front;
+    r.popFront();
+    if (!isValidDchar(code))
+        throw new UtfException("illegal code point", code);
+    return code;
+}
+
+unittest
+{
+    enum dstring witness =
+         "\u0000\u007F\u0080\u07FF\u0800\uD7FF\uE000\uFFFD"
+        ~"\U00010000\U0010FFFF"
+        ~"\U0001D800\U0001DBFF\U0001DC00\U0001DFFF\U0001FFFF";
+
+    foreach (String; TypeTuple!(string, wstring, dstring))
+    {
+        auto r = _BidiCodeUnits!String(witness);
+        dchar c;
+        size_t k = 0;
+        for (; !r.empty; ++k)
+            assert(decodeFront(r) == witness[k]);
+        assert(k == witness.length);
+    }
+}
+
+unittest
+{
+    string[] wrong =
+    [
+        "\xE3",
+        "\xE3\x81",
+        "\xFE\xFF",
+        "\xFF\xFE",
+
+        "\xED\xA0\x80",
+        "\xED\xAD\xBF",
+        "\xED\xAE\x80",
+        "\xED\xAF\xBF",
+        "\xED\xB0\x80",
+        "\xED\xBE\x80",
+        "\xED\xBF\xBF",
+
+        "\xF4\x90\x80\x80"
+        "\xF8\x88\x80\x80\x80",
+        "\xFC\x88\x80\x80\x80\x80",
+
+        "\xC0\x80",
+        "\xC1\xBF",
+        "\xE0\x80\x80",
+        "\xE0\x9F\xBF",
+        "\xF0\x80\x80\x80",
+        "\xF0\x8F\xBF\xBF",
+    ];
+
+    foreach (string str; wrong)
+    {
+        auto r = _BidiCodeUnits!string(str);
+        dchar c;
+        assert(expectError_( decodeFront(r) ));
+    }
+}
+
+unittest
+{
+    wstring[] wrong =
+    [
+        [ 0xD800 ],
+        [ 0xDBFF ],
+        [ 0xDC00 ],
+        [ 0xDFFF ],
+        [ 0xD800, 0x0000 ],
+        [ 0xDBFF, 0x0000 ]
+    ];
+
+    foreach (wstring str; wrong)
+    {
+        auto r = _BidiCodeUnits!wstring(str);
+        assert(expectError_( decodeFront(r) ));
+    }
+}
+
+unittest
+{
+    dstring[] wrong =
+    [
+        [ cast(immutable dchar) 0xD800 ],
+        [ cast(immutable dchar) 0xDBFF ],
+        [ cast(immutable dchar) 0xDC00 ],
+        [ cast(immutable dchar) 0xDFFF ],
+        [ cast(immutable dchar) 0x110000 ],
+        [ cast(immutable dchar) 0xFFFFFFFF ]
+    ];
+    foreach (dstring str; wrong)
+    {
+        auto r = _BidiCodeUnits!dstring(str);
+        assert(expectError_( decodeFront(r) ));
+    }
+}
+
+
+/**
+ * Decodes one dchar from input range $(D r). Returns the decoded
+ * character and the shortened range.
+ */
+dchar decodeBack(Range)(ref Range r)
+    if (isInputRange!(Range) && is(Unqual!(ElementType!Range) == char))
+in
+{
+    assert(!r.empty);
+}
+out (result)
+{
+    assert(isValidDchar(result));
+}
+body
+{
+    char[4] store  = void;
+    size_t  stride = 0;
+    char    u;
+
+    do
+    {
+        if (r.empty || stride == 4)
+            break;  // decodeFront will throw
+        u = r.back;
+        r.popBack();
+        store[$ - ++stride] = u;
+    }
+    while ((u & 0b11000000) == 0b10000000);
+
+    char[] uchar = store[$ - stride .. $];
+    return decodeFront(uchar);
+}
+
+/// ditto
+dchar decodeBack(Range)(ref Range r)
+    if (isInputRange!(Range) && is(Unqual!(ElementType!Range) == wchar))
+in
+{
+    assert(!r.empty);
+}
+out (result)
+{
+    assert(isValidDchar(result));
+}
+body
+{
+    dchar code;
+
+    code = r.back;
+    r.popBack();
+
+    // surrogate pair
+    if ((code & 0xF800) == 0xD800)
+    {
+        if ((code & 0xFC00) == 0xD800)
+            throw new UtfException("unpaired high surrogate", code);
+        if (r.empty)
+            throw new UtfException("unpaired low surrogate", code);
+
+        immutable wchar pair = r.back;
+        r.popBack();
+
+        if ((pair & 0xFC00) != 0xD800)
+            throw new UtfException("illegal surrogate pair", pair, code);
+
+        // compose the represented code point
+        code = ((pair - 0xD7C0) << 10) + (code - 0xDC00);
+    }
+
+    return code;
+}
+
+/// ditto
+dchar decodeBack(Range)(ref Range r)
+    if (isInputRange!(Range) && is(Unqual!(ElementType!Range) == dchar))
+in
+{
+    assert(!r.empty);
+}
+out (result)
+{
+    assert(isValidDchar(result));
+}
+body
+{
+    immutable dchar c = r.back;
+    r.popBack();
+
+    if (!isValidDchar(c))
+        throw new UtfException("illegal code point", c);
+    return c;
+}
+
+unittest
+{
+    enum dstring witness =
+         "\u0000\u007F\u0080\u07FF\u0800\uD7FF\uE000\uFFFD"
+        ~"\U00010000\U0010FFFF"
+        ~"\U0001D800\U0001DBFF\U0001DC00\U0001DFFF\U0001FFFF";
+
+    foreach (String; TypeTuple!(string, wstring, dstring))
+    {
+        auto r = _BidiCodeUnits!String(witness);
+        try
+        {
+            foreach_reverse (dchar c; witness)
+            {
+                assert(!r.empty);
+                decodeBack(r) == c || assert(0, String.stringof);
+            }
+            assert(r.empty);
+        }
+        catch (UtfException e)
+        {
+            assert(0, String.stringof ~ "|" ~ e.toString());
+        }
+    }
+}
+
+unittest
+{
+    string[] wrong =
+    [
+        "\xE3",
+        "\xE3\x81",
+        "\xFE\xFF",
+        "\xFF\xFE",
+
+        "\xED\xA0\x80",
+        "\xED\xAD\xBF",
+        "\xED\xAE\x80",
+        "\xED\xAF\xBF",
+        "\xED\xB0\x80",
+        "\xED\xBE\x80",
+        "\xED\xBF\xBF",
+
+        "\xF4\x90\x80\x80"
+        "\xF8\x88\x80\x80\x80",
+        "\xFC\x88\x80\x80\x80\x80",
+
+        "\xC0\x80",
+        "\xC1\xBF",
+        "\xE0\x80\x80",
+        "\xE0\x9F\xBF",
+        "\xF0\x80\x80\x80",
+        "\xF0\x8F\xBF\xBF",
+    ];
+    foreach (string str; wrong)
+    {
+        auto r = _BidiCodeUnits!string(str);
+        assert(expectError_( decodeBack(r) ));
+    }
+}
+
+unittest
+{
+    wstring[] wrong =
+    [
+        [ 0xD800 ],
+        [ 0xDBFF ],
+        [ 0xDC00 ],
+        [ 0xDFFF ],
+        [ 0x0000, 0xDC00 ],
+        [ 0x0000, 0xDFFF ]
+    ];
+    foreach (wstring str; wrong)
+    {
+        auto r = _BidiCodeUnits!wstring(str);
+        assert(expectError_( decodeBack(r) ));
+    }
+}
+
+unittest
+{
+    dstring[] wrong =
+    [
+        [ cast(immutable dchar) 0xD800 ],
+        [ cast(immutable dchar) 0xDBFF ],
+        [ cast(immutable dchar) 0xDC00 ],
+        [ cast(immutable dchar) 0xDFFF ],
+        [ cast(immutable dchar) 0x110000 ],
+        [ cast(immutable dchar) 0xFFFFFFFF ]
+    ];
+    foreach (dstring str; wrong)
+    {
+        auto r = _BidiCodeUnits!dstring(str);
+        assert(expectError_( decodeBack(r) ));
+    }
+}
+
+
 /* =================== Encode ======================= */
 
 /*******************************
@@ -849,6 +1302,114 @@ ubyte codeLength(C)(dchar c)
         return 1;
     }
 }
+
+
+/* =================== Encode into Range ======================= */
+
+/**
+ * Encodes one code point $(D c) into output range $(D r) using $(D C)
+ * as a code unit.
+ */
+void putUTF(C : char, R)(ref R r, dchar c)
+{
+    static assert(isOutputRange!(R, char), R.stringof ~ " is not an "
+            ~ "output range that accepts code units of the type char");
+
+    if (c < 0x80)
+    {
+        r.put(cast(char) c);
+    }
+    else if (c < 0x0800)
+    {
+        r.put(cast(char) (0b11000000 | (c >> 6        )));
+        r.put(cast(char) (0b10000000 | (c & 0b00111111)));
+    }
+    else if (c < 0x10000)
+    {
+        if ((c & 0xF800) == 0xD800)
+            throw new UtfException("encoding surrogate code point in UTF-8", c);
+        r.put(cast(char) (0b11100000 |  (c >> 12)              ));
+        r.put(cast(char) (0b10000000 | ((c >> 6 ) & 0b00111111)));
+        r.put(cast(char) (0b10000000 | ( c        & 0b00111111)));
+    }
+    else if (c < 0x110000)
+    {
+        r.put(cast(char) (0b11110000 | ( c >> 18)              ));
+        r.put(cast(char) (0b10000000 | ((c >> 12) & 0b00111111)));
+        r.put(cast(char) (0b10000000 | ((c >>  6) & 0b00111111)));
+        r.put(cast(char) (0b10000000 | ( c        & 0b00111111)));
+    }
+    else throw new UtfException("encoding invalid code point in UTF-8", c);
+}
+
+/// ditto
+void putUTF(C : wchar, R)(ref R r, dchar c)
+{
+    static assert(isOutputRange!(R, wchar), R.stringof ~ " is not an "
+            ~ "output range that accepts code units of the type wchar");
+
+    if (c < 0x10000)
+    {
+        if ((c & 0x1F_F800) == 0x00_D800)
+            throw new UtfException("encoding isolated surrogate code "
+                    ~ "point in UTF-16", c);
+        r.put(cast(wchar) c);
+    }
+    else if (c < 0x110000)
+    {
+        r.put(cast(wchar) ((((c - 0x10000) >> 10) & 0x3FF) + 0xD800));
+        r.put(cast(wchar) (( (c - 0x10000)        & 0x3FF) + 0xDC00));
+    }
+    else throw new UtfException("encoding invalid code point in UTF-16", c);
+}
+
+/// ditto
+void putUTF(C : dchar, R)(ref R r, dchar c)
+{
+    static assert(isOutputRange!(R, dchar), R.stringof ~ " is not an "
+            ~ "output range that accepts code units of the type dchar");
+
+    if (!isValidDchar(c))
+        throw new UtfException("encoding invalid code point in UTF-32", c);
+    r.put(c);
+}
+
+unittest
+{
+    enum dstring codepoints =
+         "\u0000\u007F\u0080\u07FF\u0800\uD7FF\uE000\uFFFD"
+        ~"\U00010000\U0001D800\U0001DBFF\U0001DC00\U0001DFFF"
+        ~"\U0001FFFF\U0010FFFF";
+    foreach (Char; TypeTuple!(char, wchar, dchar))
+    {
+        immutable(Char)[] witness = codepoints;
+        Char[64] store;
+        Char[]   buffer = store;
+
+        foreach (dchar c; codepoints)
+            putUTF!Char(buffer, c);
+        assert(store[0 .. $ - buffer.length] == witness);
+    }
+}
+
+unittest
+{
+    immutable int[] wrong =
+    [
+        0x00D800, 0x00DBFF, 0x00DC00, 0x00DFFF, 0x110000, 0x11FFFF,
+        0x7FFFFFFF, 0xFFFFFFFF
+    ];
+    foreach (c; wrong)
+    {
+        auto ubuf = new  char[](4);
+        auto wbuf = new wchar[](2);
+        auto dbuf = new dchar[](1);
+        assert(expectError_( putUTF! char(ubuf, c) ));
+        assert(expectError_( putUTF!wchar(wbuf, c) ));
+        assert(expectError_( putUTF!dchar(dbuf, c) ));
+    }
+}
+
 
 /* =================== Validation ======================= */
 
@@ -1218,682 +1779,6 @@ unittest
     assert(count("a") == 1);
     assert(count("abc") == 3);
     assert(count("\u20AC100") == 4);
-}
-
-
-//----------------------------------------------------------------------------//
-// [devel]
-
-version (unittest) private
-{
-    import std.typetuple;
-
-    struct NaiveInput(A : E[], E)
-    {
-        A array;
-        @property bool  empty() { return array.length == 0; }
-        @property Unqual!E front() { return array[0]; }
-        void popFront() { array = array[1 .. $]; }
-    }
-
-    struct NaiveCatenator(E)
-    {
-        E[] result;
-        void put(in E[] str) { result ~= str; }
-    }
-}
-
-private alias enforceEx!UtfException enforceUTF;
-
-private ElementType!R popNext(R)(ref R r)
-in
-{
-    assert(!r.empty);
-}
-body
-{
-    auto e = r.front;
-    r.popFront;
-    return e;
-}
-
-
-/**
- * Extracts a UTF character sequence at the beginning of the input range
- * $(D source) and returns the corresponding code point.
- */
-@system dchar decodeNext(R)(ref R source)
-        if (isInputRange!(R) && is(ElementType!R == char))
-in
-{
-    assert(!source.empty);
-}
-out(r)
-{
-    assert(isValidDchar(r));
-}
-body
-{
-    uint code = popNext(source);
-
-    immutable stride = UTF8stride[code];
-    if (stride > 1)
-    {
-        enforceUTF(stride <= 4, "invalid UTF-8 lead byte");
-
-        // Mask out (7-stride) significant bits.
-        code &= (1 << (7 - stride)) - 1;
-
-        // Decode trailing sequence of (stride-1) bytes.
-        foreach (i; 1 .. stride)
-        {
-            enforceUTF(!source.empty, "decoding trailing UTF-8 sequence past "
-                    ~ "the end of " ~ R.stringof);
-
-            immutable char u = popNext(source);
-            enforceUTF((u & 0b11000000) == 0b10000000, "invalid UTF-8 sequence");
-
-            code = (code << 6) | (u & 0b00111111);
-        }
-
-        static immutable dchar[4] LOWER_BOUND =
-            [ '\u0000', '\u0080', '\u0800', '\U00010000' ];
-        enforceUTF(code >= LOWER_BOUND[stride - 1], "overlong UTF-8 sequence");
-        enforceUTF(isValidDchar(code), "invalid code point decoding UTF-8");
-    }
-
-    return code;
-}
-
-/// ditto
-@system dchar decodeNext(R)(ref R source)
-        if (isInputRange!(R) && is(ElementType!R == wchar))
-in
-{
-    assert(!source.empty);
-}
-out(r)
-{
-    assert(isValidDchar(r));
-}
-body
-{
-    uint code = popNext(source);
-
-    if ((code & 0xF800) == 0xD800)
-    {
-        enforceUTF((code & 0xFC00) == 0xD800, "sudden low surrogate appearance");
-        enforceUTF(!source.empty, "surrogate pair past the end of " ~ R.stringof);
-
-        immutable wchar pair = popNext(source);
-        enforceUTF((pair & 0xFC00) == 0xDC00, "expected a low surrogate");
-
-        code = ((code - 0xD7C0) << 10) + (pair - 0xDC00);
-    }
-    return code;
-}
-
-/// ditto
-@system dchar decodeNext(R)(ref R source)
-        if (isInputRange!(R) && is(ElementType!R == dchar))
-in
-{
-    assert(!source.empty);
-}
-out(r)
-{
-    assert(isValidDchar(r));
-}
-body
-{
-    immutable dchar code = popNext(source);
-
-    if (!isValidDchar(code))
-        throw new UtfException("illegal code point decoding UTF-32", code);
-    return code;
-}
-
-unittest
-{
-    enum dstring witness =
-         "\u0000\u007F\u0080\u07FF\u0800\uD7FF\uE000\uFFFD"
-        ~"\U00010000\U0010FFFF"
-        ~"\U0001D800\U0001DBFF\U0001DC00\U0001DFFF\U0001FFFF";
-
-    foreach (String; TypeTuple!(string, wstring, dstring))
-    {
-        auto r = NaiveInput!String(witness);
-        dchar c;
-        size_t k = 0;
-        for (; !r.empty; ++k)
-            assert(decodeNext(r) == witness[k]);
-        assert(k == witness.length);
-    }
-}
-
-unittest
-{
-    string[] wrong =
-    [
-        "\xE3",
-        "\xE3\x81",
-        "\xFE\xFF",
-        "\xFF\xFE",
-
-        "\xED\xA0\x80",
-        "\xED\xAD\xBF",
-        "\xED\xAE\x80",
-        "\xED\xAF\xBF",
-        "\xED\xB0\x80",
-        "\xED\xBE\x80",
-        "\xED\xBF\xBF",
-
-        "\xF4\x90\x80\x80"
-        "\xF8\x88\x80\x80\x80",
-        "\xFC\x88\x80\x80\x80\x80",
-
-        "\xC0\x80",
-        "\xC1\xBF",
-        "\xE0\x80\x80",
-        "\xE0\x9F\xBF",
-        "\xF0\x80\x80\x80",
-        "\xF0\x8F\xBF\xBF",
-    ];
-    foreach (str; wrong)
-    {
-        auto r = NaiveInput!string(str);
-        dchar c;
-        assert(expectError_( decodeNext(r) ));
-    }
-}
-
-unittest
-{
-    wstring[] wrong =
-    [
-        [ 0xDC00 ],
-        [ 0xD800 ],
-        [ 0xD800, 0x0000 ]
-    ];
-    foreach (str; wrong)
-    {
-        auto r = NaiveInput!wstring(str);
-        assert(expectError_( decodeNext(r) ));
-    }
-}
-
-unittest
-{
-    dstring[] wrong =
-    [
-        [ cast(immutable dchar) 0xD800 ],
-        [ cast(immutable dchar) 0xDBFF ],
-        [ cast(immutable dchar) 0xDC00 ],
-        [ cast(immutable dchar) 0xDFFF ],
-        [ cast(immutable dchar) 0x110000 ],
-        [ cast(immutable dchar) 0xFFFFFFFF ]
-    ];
-    foreach (str; wrong)
-    {
-        auto r = NaiveInput!dstring(str);
-        assert(expectError_( decodeNext(r) ));
-    }
-}
-
-
-/**
- * Encodes a Unicode code point $(D c) into UTF code units.
- *
- * Params:
- *  Char = code unit type: $(D char), $(D wchar) or $(D dchar)
- *  sink = output range that accepts the UTF code units
- *  c    = code point to encode
- */
-void putUTF(Char, R)(ref R sink, dchar c)
-        if (is(Char == char))
-{
-    static assert(isOutputRange!(R, char), R.stringof ~ " is not an output "
-            ~"range that accepts code units of the type char");
-
-    if (c < 0x80)
-    {
-        sink.put(cast(char) c);
-    }
-    else if (c < 0x0800)
-    {
-        sink.put(cast(char) (0b11000000 | (c >> 6        )));
-        sink.put(cast(char) (0b10000000 | (c & 0b00111111)));
-    }
-    else if (c < 0x10000)
-    {
-        if ((c & 0xF800) == 0xD800)
-            throw new UtfException("encoding surrogate code point in UTF-8", c);
-        sink.put(cast(char) (0b11100000 |  (c >> 12)              ));
-        sink.put(cast(char) (0b10000000 | ((c >> 6 ) & 0b00111111)));
-        sink.put(cast(char) (0b10000000 | ( c        & 0b00111111)));
-    }
-    else if (c < 0x110000)
-    {
-        sink.put(cast(char) (0b11110000 | ( c >> 18)              ));
-        sink.put(cast(char) (0b10000000 | ((c >> 12) & 0b00111111)));
-        sink.put(cast(char) (0b10000000 | ((c >>  6) & 0b00111111)));
-        sink.put(cast(char) (0b10000000 | ( c        & 0b00111111)));
-    }
-    else throw new UtfException("encoding invalid code point in UTF-8", c);
-}
-
-/// ditto
-void putUTF(Char, R)(ref R sink, dchar c)
-        if (is(Char == wchar))
-{
-    static assert(isOutputRange!(R, wchar), R.stringof ~ " is not an output "
-            ~"range that accepts code units of the type wchar");
-
-    if (c < 0x10000)
-    {
-        if ((c & 0xF800) == 0xD800)
-            throw new UtfException("encoding isolated surrogate code point in UTF-16", c);
-        sink.put(cast(wchar) c);
-    }
-    else if (c < 0x110000)
-    {
-        sink.put(cast(wchar) ((((c - 0x10000) >> 10) & 0x3FF) + 0xD800));
-        sink.put(cast(wchar) (( (c - 0x10000)        & 0x3FF) + 0xDC00));
-    }
-    else throw new UtfException("encoding invalid code point in UTF-16", c);
-}
-
-/// ditto
-void putUTF(Char, R)(ref R sink, dchar c)
-        if (is(Char == dchar))
-{
-    static assert(isOutputRange!(R, dchar), R.stringof ~ " is not an output "
-            ~"range that accepts code units of the type dchar");
-
-    if (c >= 0x110000 || (c & 0x1FF800) == 0xD800)
-        throw new UtfException("encoding invalid code point in UTF-32", c);
-    sink.put(c);
-}
-
-unittest
-{
-    enum dstring codepoints =
-         "\u0000\u007F\u0080\u07FF\u0800\uD7FF\uE000\uFFFD"
-        ~"\U00010000\U0001D800\U0001DBFF\U0001DC00\U0001DFFF"
-        ~"\U0001FFFF\U0010FFFF";
-    foreach (Char; TypeTuple!(char, wchar, dchar))
-    {
-        immutable(Char)[] witness = codepoints;
-        Char[64] store;
-        Char[]   buffer = store;
-
-        foreach (dchar c; codepoints)
-            putUTF!Char(buffer, c);
-        assert(store[0 .. $ - buffer.length] == witness);
-    }
-}
-
-unittest
-{
-    immutable int[] wrong =
-    [
-        0x00D800, 0x00DBFF, 0x00DC00, 0x00DFFF, 0x110000, 0x11FFFF,
-        0x7FFFFFFF, 0xFFFFFFFF
-    ];
-    foreach (c; wrong)
-    {
-        auto ubuf = new  char[](4);
-        auto wbuf = new wchar[](2);
-        auto dbuf = new dchar[](1);
-        assert(expectError_( putUTF! char(ubuf, c) ));
-        assert(expectError_( putUTF!wchar(wbuf, c) ));
-        assert(expectError_( putUTF!dchar(dbuf, c) ));
-    }
-}
-
-
-/**
- * Returns an input range for iterating through a given input range $(D r) for
- * Unicode code points.  The element type of the input range $(D R) must be
- * $(D char), $(D wchar) or $(D dchar).
- */
-ByCodePoint!R byCodePoint(R)(R r)
-        if (isInputRange!(R) && isSomeChar!(ElementType!R))
-{
-    return ByCodePoint!R(r);
-}
-
-/// ditto
-struct ByCodePoint(Source)
-{
-    enum dchar NOTHING = cast(dchar) -1;
-
-    this(Source source)
-    {
-        _source = source;
-    }
-
-    static if (isInfinite!(Source))
-    {
-        enum bool empty = false;
-    }
-    else
-    {
-        @property bool empty()
-        {
-            return _source.empty && _front == NOTHING;
-        }
-    }
-
-    @property dchar front()
-    {
-        if (_front == NOTHING)
-            popFront;
-        return _front;
-    }
-
-    void popFront()
-    in
-    {
-        assert(!_source.empty || _front != NOTHING);
-    }
-    body
-    {
-        if (_source.empty)
-            _front = NOTHING;
-        else
-            _front = decodeNext(_source);
-    }
-
-private:
-    Source _source;
-    dchar  _front = NOTHING;
-}
-
-unittest
-{
-    enum dstring witness =
-         "\u0000\u007F\u0080\u07FF\u0800\uD7FF\uE000\uFFFD"
-        ~"\U00010000\U0010FFFF"
-        ~"\U0001D800\U0001DBFF\U0001DC00\U0001DFFF\U0001FFFF";
-
-    foreach (String; TypeTuple!(string, wstring, dstring))
-    {
-        auto r = byCodePoint(NaiveInput!String(witness));
-        size_t k = 0;
-        for (; !r.empty; r.popFront)
-        {
-            assert(r.front == witness[k]);
-            ++k;
-        }
-        assert(k == witness.length);
-    }
-}
-
-
-/**
- * Returns an output range that encodes strings into UTF code sequence
- * corresponding to core unit type $(D Char).
- *
- * Params:
- *  Char = code unit type: $(D char), $(D wchar) or $(D dchar)
- *  sink = output range that accepts strings of type $(D Char[])
- *
- * Example:
---------------------
-auto a = appender!(wchar[]);
-auto w = writeTextIn!wchar(a);
-
-w.put("The quick brown fox"c);
-w.put(' ');
-w.put("jumps over"w);
-w.put(' ');
-w.put("the lazy dog"d);
-
-// The strings are converted to UTF-16
-assert(a.data == "The quick brown fox jumps over the lazy dog"w);
---------------------
- */
-UTFTextWriter!(Char, Sink) writeTextIn(Char, Sink)(Sink sink)
-        if (isSomeChar!(Char))
-{
-    static assert(isOutputRange!(Sink, Char[]),
-            Sink.stringof ~ " is not an output range that accepts strings "
-            ~ "of type " ~ (Char[]).stringof);
-    return UTFTextWriter!(Char, Sink)(sink);
-}
-
-/// Ditto
-struct UTFTextWriter(Char, Sink)
-        if (is(Char == char))
-{
-    enum size_t BUFFER_SIZE = 128;
-    Sink sink;
-
-    void put(in char[] str)
-    {
-        sink.put(str);
-    }
-
-    void put(in wchar[] str)
-    {
-        char[BUFFER_SIZE] ustore = void;
-        char[]            ubuf   = ustore;
-
-        for (size_t i = 0; i < str.length; )
-        {
-            assert(ubuf.length >= 4);
-            putUTF!char(ubuf, str.decode(i));
-
-            if (ubuf.length < 4 || i == str.length)
-            {
-                sink.put(ustore[0 .. $ - ubuf.length]);
-                ubuf = ustore;
-            }
-        }
-    }
-
-    void put(in dchar[] str)
-    {
-        char[BUFFER_SIZE] ustore = void;
-        char[]            ubuf   = ustore;
-
-        foreach (dchar c; str)
-        {
-            assert(ubuf.length >= 4);
-            putUTF!char(ubuf, c);
-
-            if (ubuf.length < 4)
-            {
-                sink.put(ustore[0 .. $ - ubuf.length]);
-                ubuf = ustore;
-            }
-        }
-        if (ubuf.length < ustore.length)
-            sink.put(ustore[0 .. $ - ubuf.length]);
-    }
-
-    void put(dchar c)
-    {
-        char[4] ubuf = void;
-
-        static if (isOutputRange!(Sink, char))
-        {
-            if (c < 0x80)
-                return sink.put(cast(char) c);
-        }
-        sink.put(ubuf[0 .. encode(ubuf, c)]);
-    }
-}
-
-/// Ditto
-struct UTFTextWriter(Char, Sink)
-        if (is(Char == wchar))
-{
-    private enum size_t BUFFER_SIZE = 80;
-    Sink sink;
-
-    void put(in char[] str)
-    {
-        wchar[BUFFER_SIZE] wstore = void;
-        wchar[]            wbuf   = wstore;
-
-        for (size_t i = 0; i < str.length; )
-        {
-            assert(wbuf.length >= 2);
-            putUTF!wchar(wbuf, str.decode(i));
-
-            if (wbuf.length < 2 || i == str.length)
-            {
-                sink.put(wstore[0 .. $ - wbuf.length]);
-                wbuf = wstore;
-            }
-        }
-    }
-
-    void put(in wchar[] str)
-    {
-        sink.put(str);
-    }
-
-    void put(in dchar[] str)
-    {
-        wchar[BUFFER_SIZE] wstore = void;
-        wchar[]            wbuf   = wstore;
-
-        foreach (dchar c; str)
-        {
-            assert(wbuf.length >= 2);
-            putUTF!wchar(wbuf, c);
-
-            if (wbuf.length < 2)
-            {
-                sink.put(wstore[0 .. $ - wbuf.length]);
-                wbuf = wstore;
-            }
-        }
-        if (wbuf.length < wstore.length)
-            sink.put(wstore[0 .. $ - wbuf.length]);
-    }
-
-    void put(dchar c)
-    {
-        wchar[2] wbuf = void;
-
-        static if (isOutputRange!(Sink, wchar))
-        {
-            if (c < 0x10000)
-                return sink.put(cast(wchar) c);
-        }
-        sink.put(wbuf[0 .. encode(wbuf, c)]);
-    }
-}
-
-/// Ditto
-struct UTFTextWriter(Char, Sink)
-        if (is(Char == dchar))
-{
-    private enum size_t BUFFER_SIZE = 80;
-    Sink sink;
-
-    void put(in char[] str)
-    {
-        dchar[BUFFER_SIZE] buf  = void;
-        size_t             used = 0;
-
-        for (size_t i = 0; i < str.length; )
-        {
-            buf[used++] = str.decode(i);
-
-            if (used == buf.length || i == str.length)
-            {
-                sink.put(buf[0 .. used]);
-                used = 0;
-            }
-        }
-    }
-
-    void put(in wchar[] str)
-    {
-        dchar[BUFFER_SIZE] buf  = void;
-        size_t             used = 0;
-
-        for (size_t i = 0; i < str.length; )
-        {
-            buf[used++] = str.decode(i);
-
-            if (used == buf.length || i == str.length)
-            {
-                sink.put(buf[0 .. used]);
-                used = 0;
-            }
-        }
-    }
-
-    void put(in dchar[] str)
-    {
-        sink.put(str);
-    }
-
-    void put(dchar c)
-    {
-        static if (isOutputRange!(Sink, dchar))
-            sink.put(c);
-        else
-            sink.put((&c)[0 .. 1]);
-    }
-}
-
-unittest
-{
-    enum dstring codepoints =
-         "\u0000\u007F\u0080\u07FF\u0800\uD7FF\uE000\uFFFD"
-        ~"\U00010000\U0010FFFF"
-        ~"\U0001D800\U0001DBFF\U0001DC00\U0001DFFF\U0001FFFF";
-
-    foreach (Char; TypeTuple!(char, wchar, dchar))
-    {
-        alias NaiveCatenator!Char Sink;
-
-        auto w = writeTextIn!Char(Sink());
-        w.put(cast( string) codepoints);
-        w.put(cast(wstring) codepoints);
-        w.put(cast(dstring) codepoints);
-        foreach (c; codepoints) w.put(c);
-
-        immutable(Char)[] witness;
-        witness ~= codepoints ~ codepoints;
-        witness ~= codepoints ~ codepoints;
-        assert(w.sink.result == witness);
-    }
-}
-
-unittest
-{
-    enum dstring seed =
-         "\u0000\u007F\u0080\u07FF\u0800\uD7FF\uE000\uFFFD"
-        ~"\U00010000\U0010FFFF"
-        ~"\U0001D800\U0001DBFF\U0001DC00\U0001DFFF\U0001FFFF";
-
-     string veryLong8  = seed~seed~seed~seed~seed~seed~seed~seed~seed;
-    wstring veryLong16 = seed~seed~seed~seed~seed~seed~seed~seed~seed;
-    dstring veryLong32 = seed~seed~seed~seed~seed~seed~seed~seed~seed;
-    veryLong8  ~= veryLong8 ; veryLong8  ~= veryLong8;
-    veryLong16 ~= veryLong16; veryLong16 ~= veryLong16;
-    veryLong32 ~= veryLong32; veryLong32 ~= veryLong32;
-
-    static struct NullSink(Char)
-    {
-        void put(in Char[] ) {}
-    }
-
-    foreach (Char; TypeTuple!(char, wchar, dchar))
-    {
-        auto w = writeTextIn!Char(NullSink!Char());
-        w.put(veryLong8 );
-        w.put(veryLong16);
-        w.put(veryLong32);
-    }
 }
 
 
