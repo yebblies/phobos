@@ -5292,6 +5292,7 @@ enum bool isBuiltinType(T) = is(BuiltinTypeOf!T) && !isAggregateType!T;
  */
 enum bool isSIMDVector(T) = is(T : __vector(V[N]), V, size_t N);
 
+static if (is(__vector(float[4])))
 unittest
 {
     alias __vector(float[4]) SimdVec;
