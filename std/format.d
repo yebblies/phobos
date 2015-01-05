@@ -5533,12 +5533,7 @@ void doFormat()(scope void delegate(dchar) putc, TypeInfo[] arguments, va_list a
                 goto Lcomplex;
 
             case Mangle.Tsarray:
-                version (X86)
-                    putArray(argptr, (cast(TypeInfo_StaticArray)ti).len, (cast(TypeInfo_StaticArray)ti).next);
-                else version (Win64)
-                    putArray(argptr, (cast(TypeInfo_StaticArray)ti).len, (cast(TypeInfo_StaticArray)ti).next);
-                else
-                    putArray((cast(__va_list*)argptr).stack_args, (cast(TypeInfo_StaticArray)ti).len, (cast(TypeInfo_StaticArray)ti).next);
+                putArray(*cast(void **)&argptr, (cast(TypeInfo_StaticArray)ti).len, (cast(TypeInfo_StaticArray)ti).next);
                 return;
 
             case Mangle.Tarray:
@@ -5632,8 +5627,8 @@ void doFormat()(scope void delegate(dchar) putc, TypeInfo[] arguments, va_list a
                             ~ " to string: \"string toString()\" not defined");
                 version(X86)
                 {
-                    s = tis.xtoString(argptr);
-                    argptr += (tis.tsize + 3) & ~3;
+                    s = tis.xtoString(*cast(void**)&argptr);
+                    *cast(void**)argptr += (tis.tsize + 3) & ~3;
                 }
                 else version(Win64)
                 {
